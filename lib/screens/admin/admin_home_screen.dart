@@ -436,108 +436,6 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
   // BUS STOP CRUD OPERATIONS
   // ============================================
 
-  Future<void> _showAddBusStopDialog() async {
-    final nameController = TextEditingController();
-    final latController = TextEditingController();
-    final lngController = TextEditingController();
-    final orderController = TextEditingController();
-
-    // Use currently selected route
-    if (_selectedRouteIdForStops == null) return;
-    final routeId = _selectedRouteIdForStops!;
-
-    final result = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Add Stop to Route'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameController,
-                decoration: const InputDecoration(
-                  labelText: 'Stop Name',
-                  hintText: 'e.g., Thrissur Bus Stand',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: latController,
-                      decoration: const InputDecoration(
-                        labelText: 'Latitude',
-                        hintText: '10.5276',
-                        border: OutlineInputBorder(),
-                      ),
-                      keyboardType: TextInputType.number,
-                    ),
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: TextField(
-                      controller: lngController,
-                      decoration: const InputDecoration(
-                        labelText: 'Longitude',
-                        hintText: '76.2144',
-                        border: OutlineInputBorder(),
-                      ),
-                      keyboardType: TextInputType.number,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: orderController,
-                decoration: const InputDecoration(
-                  labelText: 'Order in Route (Optional)',
-                  hintText: '1, 2, 3...',
-                  border: OutlineInputBorder(),
-                ),
-                keyboardType: TextInputType.number,
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Add'),
-          ),
-        ],
-      ),
-    );
-
-    if (result == true &&
-        nameController.text.isNotEmpty &&
-        latController.text.isNotEmpty &&
-        lngController.text.isNotEmpty) {
-      try {
-        await _queries.createBusStop(
-          name: nameController.text,
-          latitude: double.parse(latController.text),
-          longitude: double.parse(lngController.text),
-          routeId: routeId,
-          orderIndex: orderController.text.isNotEmpty
-              ? int.tryParse(orderController.text)
-              : null,
-        );
-        await _loadData();
-        _showSuccess('Bus stop added');
-      } catch (e) {
-        _showError('Failed to add bus stop: $e');
-      }
-    }
-  }
-
   Future<void> _showEditBusStopDialog(
     BusStopModel stop, {
     required String routeId,
@@ -655,6 +553,216 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
   }
 
   // ============================================
+  // ROUTE CRUD OPERATIONS
+  // ============================================
+
+  Future<void> _showAddRouteDialog() async {
+    final nameController = TextEditingController();
+    final startController = TextEditingController();
+    final endController = TextEditingController();
+    final distanceController = TextEditingController();
+    bool isPopular = false;
+
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Add New Route'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nameController,
+                  decoration: const InputDecoration(
+                    labelText: 'Route Name',
+                    hintText: 'e.g., Thrissur - Ernakulam',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: startController,
+                  decoration: const InputDecoration(
+                    labelText: 'Start Location',
+                    hintText: 'e.g., Thrissur',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: endController,
+                  decoration: const InputDecoration(
+                    labelText: 'End Location',
+                    hintText: 'e.g., Ernakulam',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: distanceController,
+                  decoration: const InputDecoration(
+                    labelText: 'Distance (km, optional)',
+                    hintText: 'e.g., 75',
+                    border: OutlineInputBorder(),
+                  ),
+                  keyboardType: TextInputType.number,
+                ),
+                const SizedBox(height: 16),
+                SwitchListTile(
+                  title: const Text('Popular Route'),
+                  subtitle: const Text('Show in quick picks'),
+                  value: isPopular,
+                  onChanged: (v) => setDialogState(() => isPopular = v),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Add'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (result == true &&
+        nameController.text.isNotEmpty &&
+        startController.text.isNotEmpty &&
+        endController.text.isNotEmpty) {
+      try {
+        await _queries.createRoute(
+          name: nameController.text,
+          startLocation: startController.text,
+          endLocation: endController.text,
+          distance: distanceController.text.isNotEmpty
+              ? double.tryParse(distanceController.text)
+              : null,
+          isPopular: isPopular,
+        );
+        await _loadData();
+        _showSuccess('Route added successfully');
+      } catch (e) {
+        _showError('Failed to add route: $e');
+      }
+    }
+  }
+
+  Future<void> _showEditRouteDialog(RouteModel route) async {
+    final nameController = TextEditingController(text: route.name);
+    final startController = TextEditingController(text: route.startLocation);
+    final endController = TextEditingController(text: route.endLocation);
+    final distanceController = TextEditingController(
+      text: route.distance?.toString() ?? '',
+    );
+    bool isPopular = route.isPopular;
+
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Edit Route'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nameController,
+                  decoration: const InputDecoration(
+                    labelText: 'Route Name',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: startController,
+                  decoration: const InputDecoration(
+                    labelText: 'Start Location',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: endController,
+                  decoration: const InputDecoration(
+                    labelText: 'End Location',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: distanceController,
+                  decoration: const InputDecoration(
+                    labelText: 'Distance (km)',
+                    border: OutlineInputBorder(),
+                  ),
+                  keyboardType: TextInputType.number,
+                ),
+                const SizedBox(height: 16),
+                SwitchListTile(
+                  title: const Text('Popular Route'),
+                  subtitle: const Text('Show in quick picks'),
+                  value: isPopular,
+                  onChanged: (v) => setDialogState(() => isPopular = v),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (result == true) {
+      try {
+        await _queries.updateRoute(route.id, {
+          'name': nameController.text,
+          'start_location': startController.text,
+          'end_location': endController.text,
+          'distance': distanceController.text.isNotEmpty
+              ? double.tryParse(distanceController.text)
+              : null,
+          'is_popular': isPopular,
+        });
+        await _loadData();
+        _showSuccess('Route updated');
+      } catch (e) {
+        _showError('Failed to update route: $e');
+      }
+    }
+  }
+
+  Future<void> _deleteRoute(RouteModel route) async {
+    final confirm = await _showDeleteConfirmation(
+      'Delete "${route.name}"?\n\nThis will unassign all buses from this route.',
+    );
+    if (confirm == true) {
+      try {
+        await _queries.deleteRoute(route.id);
+        await _loadData();
+        _showSuccess('Route deleted');
+      } catch (e) {
+        _showError('Failed to delete route: $e');
+      }
+    }
+  }
+
+  // ============================================
   // HELPERS
   // ============================================
 
@@ -709,7 +817,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
       case 1:
         return 'Add Conductor';
       case 2:
-        return 'Add Stop';
+        return 'Add Route';
       default:
         return 'Add';
     }
@@ -724,7 +832,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
         _showAddConductorDialog();
         break;
       case 2:
-        _showAddBusStopDialog();
+        _showAddRouteDialog();
         break;
     }
   }
@@ -1023,116 +1131,381 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
 
   Widget _buildBusStopManagement() {
     if (_routes.isEmpty) {
-      return const Center(
-        child: Text('No routes avaliable. Add a route first.'),
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.route, size: 64, color: Colors.grey.shade400),
+            const SizedBox(height: 16),
+            Text(
+              'No routes available',
+              style: TextStyle(
+                fontSize: 18,
+                color: Colors.grey.shade600,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Tap "Add Route" to create your first route',
+              style: TextStyle(color: Colors.grey.shade500),
+            ),
+          ],
+        ),
       );
     }
 
-    // Safety check for selected route
-    if (_selectedRouteIdForStops == null ||
-        !_routes.any((r) => r.id == _selectedRouteIdForStops)) {
-      return const Center(child: CircularProgressIndicator());
-    }
-
-    final selectedRoute = _routes.firstWhere(
-      (r) => r.id == _selectedRouteIdForStops,
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
+      itemCount: _routes.length,
+      itemBuilder: (context, index) {
+        final route = _routes[index];
+        return _buildRouteCard(route);
+      },
     );
-    final routeStops = selectedRoute.busStops;
+  }
 
-    return Column(
-      children: [
-        // Route Selector
-        Card(
-          margin: const EdgeInsets.all(16),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            child: DropdownButtonHideUnderline(
-              child: DropdownButton<String>(
-                value: selectedRoute.id,
-                isExpanded: true,
-                icon: const Icon(
-                  Icons.arrow_drop_down,
-                  color: Color(0xFF1a237e),
-                ),
-                items: _routes
-                    .map(
-                      (r) => DropdownMenuItem(
-                        value: r.id,
-                        child: Text(
-                          r.name,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 16,
-                          ),
-                        ),
-                      ),
-                    )
-                    .toList(),
-                onChanged: (v) {
-                  if (v != null) setState(() => _selectedRouteIdForStops = v);
-                },
-              ),
+  Widget _buildRouteCard(RouteModel route) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          childrenPadding: const EdgeInsets.only(bottom: 8),
+          leading: Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(
+              color: const Color(0xFF1a237e).withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(12),
             ),
+            child: const Icon(Icons.route, color: Color(0xFF1a237e)),
           ),
-        ),
-
-        // Stops List
-        Expanded(
-          child: routeStops.isEmpty
-              ? const Center(child: Text('No stops in this route. Add one.'))
-              : ListView.separated(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 80),
-                  itemCount: routeStops.length,
-                  separatorBuilder: (_, __) => const Divider(),
-                  itemBuilder: (context, index) {
-                    final stop = routeStops[index];
-                    return ListTile(
-                      leading: CircleAvatar(
-                        backgroundColor: Colors.purple.withValues(alpha: 0.1),
-                        child: Text(
-                          '${index + 1}',
-                          style: const TextStyle(
-                            color: Colors.purple,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
+          title: Text(
+            route.name,
+            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+          ),
+          subtitle: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  Icon(Icons.place, size: 14, color: Colors.grey.shade600),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(
+                      '${route.startLocation} → ${route.endLocation}',
+                      style: TextStyle(
+                        color: Colors.grey.shade600,
+                        fontSize: 13,
                       ),
-                      title: Text(
-                        stop.name,
-                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 2),
+              Row(
+                children: [
+                  if (route.distance != null) ...[
+                    Icon(
+                      Icons.straighten,
+                      size: 14,
+                      color: Colors.grey.shade600,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${route.distance} km',
+                      style: TextStyle(
+                        color: Colors.grey.shade600,
+                        fontSize: 12,
                       ),
-                      subtitle: Text(
-                        '${stop.latitude.toStringAsFixed(4)}, ${stop.longitude.toStringAsFixed(4)}\nOrder: ${stop.orderIndex ?? index + 1}',
-                        style: TextStyle(
-                          color: Colors.grey.shade600,
-                          fontSize: 12,
-                        ),
+                    ),
+                    const SizedBox(width: 12),
+                  ],
+                  Icon(
+                    Icons.location_on,
+                    size: 14,
+                    color: Colors.grey.shade600,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    '${route.busStops.length} stops',
+                    style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+                  ),
+                  if (route.isPopular) ...[
+                    const SizedBox(width: 12),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
                       ),
-                      trailing: Row(
+                      decoration: BoxDecoration(
+                        color: Colors.amber.shade100,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          IconButton(
-                            icon: const Icon(Icons.edit, color: Colors.blue),
-                            onPressed: () => _showEditBusStopDialog(
-                              stop,
-                              routeId: selectedRoute.id,
-                            ),
+                          Icon(
+                            Icons.star,
+                            size: 12,
+                            color: Colors.amber.shade700,
                           ),
-                          IconButton(
-                            icon: const Icon(Icons.delete, color: Colors.red),
-                            onPressed: () =>
-                                _deleteBusStop(stop, routeId: selectedRoute.id),
+                          const SizedBox(width: 2),
+                          Text(
+                            'Popular',
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: Colors.amber.shade700,
+                              fontWeight: FontWeight.w500,
+                            ),
                           ),
                         ],
                       ),
-                    );
-                  },
+                    ),
+                  ],
+                ],
+              ),
+            ],
+          ),
+          trailing: PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert),
+            onSelected: (value) {
+              if (value == 'edit') {
+                _showEditRouteDialog(route);
+              } else if (value == 'delete') {
+                _deleteRoute(route);
+              }
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'edit',
+                child: Row(
+                  children: [
+                    Icon(Icons.edit, size: 20),
+                    SizedBox(width: 8),
+                    Text('Edit Route'),
+                  ],
                 ),
+              ),
+              const PopupMenuItem(
+                value: 'delete',
+                child: Row(
+                  children: [
+                    Icon(Icons.delete, size: 20, color: Colors.red),
+                    SizedBox(width: 8),
+                    Text('Delete Route', style: TextStyle(color: Colors.red)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          children: [
+            const Divider(height: 1),
+            // Bus stops header with add button
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
+              child: Row(
+                children: [
+                  Text(
+                    'Bus Stops',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: Colors.grey.shade700,
+                    ),
+                  ),
+                  const Spacer(),
+                  TextButton.icon(
+                    onPressed: () => _showAddBusStopDialogForRoute(route.id),
+                    icon: const Icon(Icons.add, size: 18),
+                    label: const Text('Add Stop'),
+                    style: TextButton.styleFrom(
+                      foregroundColor: const Color(0xFF1a237e),
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // Bus stops list
+            if (route.busStops.isEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade100,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.info_outline, color: Colors.grey.shade500),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'No stops yet. Add stops to define the route path.',
+                          style: TextStyle(color: Colors.grey.shade600),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              )
+            else
+              ...route.busStops.asMap().entries.map((entry) {
+                final index = entry.key;
+                final stop = entry.value;
+                return ListTile(
+                  dense: true,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                  leading: CircleAvatar(
+                    radius: 14,
+                    backgroundColor: Colors.purple.withValues(alpha: 0.1),
+                    child: Text(
+                      '${index + 1}',
+                      style: const TextStyle(
+                        color: Colors.purple,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                  title: Text(
+                    stop.name,
+                    style: const TextStyle(fontWeight: FontWeight.w500),
+                  ),
+                  subtitle: Text(
+                    '${stop.latitude.toStringAsFixed(4)}, ${stop.longitude.toStringAsFixed(4)}',
+                    style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
+                  ),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.edit, size: 20),
+                        color: Colors.blue,
+                        onPressed: () =>
+                            _showEditBusStopDialog(stop, routeId: route.id),
+                        tooltip: 'Edit stop',
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.delete, size: 20),
+                        color: Colors.red,
+                        onPressed: () =>
+                            _deleteBusStop(stop, routeId: route.id),
+                        tooltip: 'Delete stop',
+                      ),
+                    ],
+                  ),
+                );
+              }),
+          ],
         ),
-      ],
+      ),
     );
+  }
+
+  /// Show add bus stop dialog for a specific route
+  Future<void> _showAddBusStopDialogForRoute(String routeId) async {
+    final nameController = TextEditingController();
+    final latController = TextEditingController();
+    final lngController = TextEditingController();
+    final orderController = TextEditingController();
+
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Add Bus Stop'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameController,
+                decoration: const InputDecoration(
+                  labelText: 'Stop Name',
+                  hintText: 'e.g., Thrissur Bus Stand',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: latController,
+                      decoration: const InputDecoration(
+                        labelText: 'Latitude',
+                        hintText: '10.5276',
+                        border: OutlineInputBorder(),
+                      ),
+                      keyboardType: TextInputType.number,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextField(
+                      controller: lngController,
+                      decoration: const InputDecoration(
+                        labelText: 'Longitude',
+                        hintText: '76.2144',
+                        border: OutlineInputBorder(),
+                      ),
+                      keyboardType: TextInputType.number,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: orderController,
+                decoration: const InputDecoration(
+                  labelText: 'Order (optional)',
+                  hintText: '1, 2, 3...',
+                  border: OutlineInputBorder(),
+                ),
+                keyboardType: TextInputType.number,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+
+    if (result == true &&
+        nameController.text.isNotEmpty &&
+        latController.text.isNotEmpty &&
+        lngController.text.isNotEmpty) {
+      try {
+        await _queries.createBusStop(
+          name: nameController.text,
+          latitude: double.parse(latController.text),
+          longitude: double.parse(lngController.text),
+          routeId: routeId,
+          orderIndex: orderController.text.isNotEmpty
+              ? int.tryParse(orderController.text)
+              : null,
+        );
+        await _loadData();
+        _showSuccess('Bus stop added');
+      } catch (e) {
+        _showError('Failed to add bus stop: $e');
+      }
+    }
   }
 }

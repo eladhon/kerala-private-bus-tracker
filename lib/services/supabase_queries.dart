@@ -246,6 +246,47 @@ class SupabaseQueries {
     return data.map((route) => RouteModel.fromJson(route)).toList();
   }
 
+  /// Create a new route
+  Future<RouteModel> createRoute({
+    required String name,
+    required String startLocation,
+    required String endLocation,
+    double? distance,
+    bool isPopular = false,
+  }) async {
+    final response = await _client
+        .from('routes')
+        .insert({
+          'name': name,
+          'start_location': startLocation,
+          'end_location': endLocation,
+          'distance': distance,
+          'is_popular': isPopular,
+          'stops': [], // Initialize with empty stops array
+        })
+        .select()
+        .single();
+
+    return RouteModel.fromJson(response);
+  }
+
+  /// Update route details
+  Future<void> updateRoute(String routeId, Map<String, dynamic> updates) async {
+    await _client.from('routes').update(updates).eq('id', routeId);
+  }
+
+  /// Delete a route and handle associated buses
+  Future<void> deleteRoute(String routeId) async {
+    // First, unassign all buses from this route
+    await _client
+        .from('buses')
+        .update({'route_id': null})
+        .eq('route_id', routeId);
+
+    // Delete the route
+    await _client.from('routes').delete().eq('id', routeId);
+  }
+
   // ============================================
   // VEHICLE OBSERVATION / STATE QUERIES (GPS Smoothing Pipeline)
   // ============================================
@@ -760,5 +801,65 @@ class SupabaseQueries {
             sin(dLon / 2) *
             sin(dLon / 2);
     return 6371 * 2 * asin(sqrt(a)); // Earth radius in km
+  }
+
+  // ============================================
+  // ADMIN QUERIES
+  // ============================================
+
+  /// Authenticate admin user
+  Future<Map<String, dynamic>?> authenticateAdmin(
+    String username,
+    String password,
+  ) async {
+    final response = await _client
+        .from('admins')
+        .select()
+        .eq('username', username)
+        .eq('password_hash', password)
+        .eq('is_active', true)
+        .maybeSingle();
+
+    return response;
+  }
+
+  /// Get all admins
+  Future<List<Map<String, dynamic>>> getAllAdmins() async {
+    final response = await _client
+        .from('admins')
+        .select()
+        .order('username', ascending: true);
+
+    return List<Map<String, dynamic>>.from(response as List);
+  }
+
+  /// Create a new admin
+  Future<Map<String, dynamic>> createAdmin({
+    required String username,
+    required String password,
+    String? name,
+  }) async {
+    final response = await _client
+        .from('admins')
+        .insert({
+          'username': username,
+          'password_hash': password,
+          'name': name,
+          'is_active': true,
+        })
+        .select()
+        .single();
+
+    return response;
+  }
+
+  /// Update admin details
+  Future<void> updateAdmin(String adminId, Map<String, dynamic> updates) async {
+    await _client.from('admins').update(updates).eq('id', adminId);
+  }
+
+  /// Delete an admin
+  Future<void> deleteAdmin(String adminId) async {
+    await _client.from('admins').delete().eq('id', adminId);
   }
 }

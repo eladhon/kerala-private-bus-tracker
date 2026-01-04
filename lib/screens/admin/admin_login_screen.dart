@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
+import '../../services/supabase_queries.dart';
 import 'admin_home_screen.dart';
 
-/// Admin login screen with simple authentication
+/// Admin login screen with Supabase authentication
 class AdminLoginScreen extends StatefulWidget {
   const AdminLoginScreen({super.key});
 
@@ -13,13 +14,10 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
+  final _queries = SupabaseQueries();
   bool _isLoading = false;
   bool _obscurePassword = true;
   String? _errorMessage;
-
-  // Hardcoded admin credentials
-  static const String _adminUsername = 'admin';
-  static const String _adminPassword = '1234';
 
   @override
   void dispose() {
@@ -28,7 +26,7 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
     super.dispose();
   }
 
-  void _login() {
+  Future<void> _login() async {
     if (!_formKey.currentState!.validate()) return;
 
     setState(() {
@@ -36,11 +34,15 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
       _errorMessage = null;
     });
 
-    // Simulate network delay
-    Future.delayed(const Duration(milliseconds: 500), () {
+    try {
+      final admin = await _queries.authenticateAdmin(
+        _usernameController.text.trim(),
+        _passwordController.text,
+      );
+
       if (!mounted) return;
-      if (_usernameController.text == _adminUsername &&
-          _passwordController.text == _adminPassword) {
+
+      if (admin != null) {
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (context) => const AdminHomeScreen()),
@@ -51,7 +53,13 @@ class _AdminLoginScreenState extends State<AdminLoginScreen> {
           _errorMessage = 'Invalid username or password';
         });
       }
-    });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _errorMessage = 'Login failed: $e';
+      });
+    }
   }
 
   @override
