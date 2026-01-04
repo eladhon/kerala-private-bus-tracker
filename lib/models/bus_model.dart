@@ -21,10 +21,10 @@ class BusModel {
   /// Create BusModel from JSON (Supabase response)
   factory BusModel.fromJson(Map<String, dynamic> json) {
     return BusModel(
-      id: json['id'] as String,
-      name: json['name'] as String,
-      registrationNumber: json['registration_number'] as String,
-      routeId: json['route_id'] as String,
+      id: json['id'] as String? ?? '',
+      name: json['name'] as String? ?? 'Unknown Bus',
+      registrationNumber: json['registration_number'] as String? ?? '',
+      routeId: json['route_id'] as String? ?? '',
       conductorId: json['conductor_id'] as String?,
       isAvailable: json['is_available'] as bool? ?? false,
       createdAt: json['created_at'] != null

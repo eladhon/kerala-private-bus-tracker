@@ -26,6 +26,7 @@ class TileCacheService {
   /// Get the tile provider with caching
   static FMTCTileProvider? getTileProvider() {
     if (!_isSupported || _store == null) return null;
+    // ignore: deprecated_member_use
     return _store!.getTileProvider();
   }
 

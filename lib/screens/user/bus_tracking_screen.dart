@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:math' as math;
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_map_location_marker/flutter_map_location_marker.dart';
@@ -18,10 +20,19 @@ class BusTrackingScreen extends StatefulWidget {
   State<BusTrackingScreen> createState() => _BusTrackingScreenState();
 }
 
-class _BusTrackingScreenState extends State<BusTrackingScreen> {
+class _BusTrackingScreenState extends State<BusTrackingScreen>
+    with SingleTickerProviderStateMixin {
   final _queries = SupabaseQueries();
   final MapController _mapController = MapController();
-  BusLocationModel? _busLocation;
+
+  // Real-time tracking variables
+  BusLocationModel? _lastPacket;
+  DateTime? _lastPacketTime;
+  BusLocationModel? _interpolatedLocation; // The location we show on UI
+
+  // Ticker for smooth animation (dead reckoning)
+  late final Ticker _ticker;
+
   Position? _userPosition;
   StreamSubscription? _locationSubscription;
   Timer? _refreshTimer;
@@ -35,11 +46,83 @@ class _BusTrackingScreenState extends State<BusTrackingScreen> {
   @override
   void initState() {
     super.initState();
+    _ticker = createTicker(_onTick);
+    _ticker.start();
     _initializeTracking();
+  }
+
+  /// Dead reckoning tick loop (runs every frame)
+  void _onTick(Duration elapsed) {
+    if (_lastPacket == null ||
+        _lastPacket?.speed == null ||
+        _lastPacketTime == null) {
+      return;
+    }
+
+    // Only interpolate if moving and data is fresh (< 30s old)
+    // If data is too old, stop moving to avoid showing it driving off the map forever
+    final timeSincePacket = DateTime.now().difference(_lastPacketTime!);
+    if (timeSincePacket.inSeconds > 30 || (_lastPacket!.speed ?? 0) < 0.5) {
+      return;
+    }
+
+    // Calculate distance moved: Speed (km/h) / 3.6 = m/s
+    // distance = speed * time
+    final speedMs = (_lastPacket!.speed!) / 3.6;
+    final elapsedSincePacket = timeSincePacket.inMilliseconds / 1000.0;
+
+    // Calculate new lat/lng based on heading and distance
+    final newPos = _calculateNewPosition(
+      _lastPacket!.latitude,
+      _lastPacket!.longitude,
+      speedMs,
+      _lastPacket!.heading ?? 0,
+      elapsedSincePacket,
+    );
+
+    setState(() {
+      _interpolatedLocation = _lastPacket!.copyWith(
+        latitude: newPos.latitude,
+        longitude: newPos.longitude,
+      );
+    });
+
+    if (_followBus) {
+      _centerOnBus();
+    }
+  }
+
+  LatLng _calculateNewPosition(
+    double lat,
+    double lng,
+    double speedMs,
+    double heading,
+    double elapsedSeconds,
+  ) {
+    const R = 6371000.0; // Earth radius in meters
+    final distance = speedMs * elapsedSeconds;
+
+    final lat1 = lat * math.pi / 180;
+    final lng1 = lng * math.pi / 180;
+    final brng = heading * math.pi / 180;
+
+    final lat2 = math.asin(
+      math.sin(lat1) * math.cos(distance / R) +
+          math.cos(lat1) * math.sin(distance / R) * math.cos(brng),
+    );
+    final lng2 =
+        lng1 +
+        math.atan2(
+          math.sin(brng) * math.sin(distance / R) * math.cos(lat1),
+          math.cos(distance / R) - math.sin(lat1) * math.sin(lat2),
+        );
+
+    return LatLng(lat2 * 180 / math.pi, lng2 * 180 / math.pi);
   }
 
   @override
   void dispose() {
+    _ticker.dispose();
     _locationSubscription?.cancel();
     _refreshTimer?.cancel();
     super.dispose();
@@ -58,7 +141,11 @@ class _BusTrackingScreenState extends State<BusTrackingScreen> {
         .listen(
           (location) {
             if (mounted && location != null) {
-              setState(() => _busLocation = location);
+              _lastPacket = location;
+              _lastPacketTime = DateTime.now();
+              // Reset interpolation to actual location when new packet arrives
+              setState(() => _interpolatedLocation = location);
+
               if (_followBus) {
                 _centerOnBus();
               }
@@ -90,7 +177,9 @@ class _BusTrackingScreenState extends State<BusTrackingScreen> {
       if (permission == LocationPermission.deniedForever) return;
 
       final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+        ),
       );
       setState(() => _userPosition = position);
     } catch (e) {
@@ -103,7 +192,10 @@ class _BusTrackingScreenState extends State<BusTrackingScreen> {
       final location = await _queries.getBusLocation(widget.bus.id);
       if (mounted && location != null) {
         setState(() {
-          _busLocation = location;
+          _lastPacket = location;
+          _lastPacketTime = DateTime.now();
+          // Initially set interpolated location to actual
+          _interpolatedLocation ??= location;
           _isLoading = false;
         });
         if (_followBus) {
@@ -119,8 +211,8 @@ class _BusTrackingScreenState extends State<BusTrackingScreen> {
   }
 
   void _centerOnBus() {
-    if (_busLocation != null) {
-      _mapController.move(_busLocation!.latLng, 15);
+    if (_interpolatedLocation != null) {
+      _mapController.move(_interpolatedLocation!.latLng, 15);
     }
   }
 
@@ -143,7 +235,8 @@ class _BusTrackingScreenState extends State<BusTrackingScreen> {
             mapController: _mapController,
             options: MapOptions(
               initialCenter:
-                  _busLocation?.latLng ?? const LatLng(10.8505, 76.2711),
+                  _interpolatedLocation?.latLng ??
+                  const LatLng(10.8505, 76.2711),
               initialZoom: 12,
               onPositionChanged: (position, hasGesture) {
                 if (hasGesture) {
@@ -170,11 +263,11 @@ class _BusTrackingScreenState extends State<BusTrackingScreen> {
                   ),
                 ),
               // Bus location marker
-              if (_busLocation != null)
+              if (_interpolatedLocation != null)
                 MarkerLayer(
                   markers: [
                     Marker(
-                      point: _busLocation!.latLng,
+                      point: _interpolatedLocation!.latLng,
                       width: 50,
                       height: 50,
                       child: _buildBusMarker(),
@@ -310,10 +403,10 @@ class _BusTrackingScreenState extends State<BusTrackingScreen> {
                               : Colors.red,
                         ),
                         const SizedBox(width: 12),
-                        if (_busLocation != null)
+                        if (_interpolatedLocation != null)
                           _buildStatusChip(
                             icon: Icons.speed,
-                            label: _busLocation!.speedDisplay,
+                            label: _interpolatedLocation!.speedDisplay,
                             color: Colors.blue,
                           ),
                         const Spacer(),
@@ -355,7 +448,7 @@ class _BusTrackingScreenState extends State<BusTrackingScreen> {
                         padding: EdgeInsets.all(20),
                         child: CircularProgressIndicator(),
                       )
-                    else if (_busLocation == null)
+                    else if (_interpolatedLocation == null)
                       Padding(
                         padding: const EdgeInsets.all(20),
                         child: Column(
@@ -385,7 +478,7 @@ class _BusTrackingScreenState extends State<BusTrackingScreen> {
                               ),
                               const SizedBox(width: 8),
                               Text(
-                                'Last updated: ${_busLocation!.lastUpdatedDisplay}',
+                                'Last updated: ${_interpolatedLocation!.lastUpdatedDisplay} (Live)',
                                 style: TextStyle(color: Colors.grey.shade600),
                               ),
                             ],
@@ -400,7 +493,7 @@ class _BusTrackingScreenState extends State<BusTrackingScreen> {
                               ),
                               const SizedBox(width: 8),
                               Text(
-                                '${_busLocation!.latitude.toStringAsFixed(4)}, ${_busLocation!.longitude.toStringAsFixed(4)}',
+                                '${_interpolatedLocation!.latitude.toStringAsFixed(4)}, ${_interpolatedLocation!.longitude.toStringAsFixed(4)}',
                                 style: TextStyle(
                                   color: Colors.grey.shade600,
                                   fontFamily: 'monospace',
@@ -433,7 +526,7 @@ class _BusTrackingScreenState extends State<BusTrackingScreen> {
                   ),
                 const SizedBox(height: 8),
                 // Center on bus button
-                if (!_followBus && _busLocation != null)
+                if (!_followBus && _interpolatedLocation != null)
                   FloatingActionButton.small(
                     heroTag: 'bus_location',
                     onPressed: () {

@@ -50,19 +50,21 @@ class _LoginScreenState extends State<LoginScreen> {
       // Check if user exists in database
       final user = await _queries.getUserByPhone(phone);
 
+      String role = 'user';
+
       if (user == null) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                'User not found. Please contact admin to register.',
-              ),
-              backgroundColor: Colors.red,
-            ),
+        // Auto-register new user as Passenger
+        try {
+          await _queries.createUser(
+            phone: phone,
+            name: 'Passenger',
+            role: 'user',
           );
+        } catch (e) {
+          debugPrint('Error creating user: $e');
         }
-        setState(() => _isLoading = false);
-        return;
+      } else {
+        role = user.role;
       }
 
       // For now, navigate directly to home based on role (simplified auth)
@@ -71,8 +73,7 @@ class _LoginScreenState extends State<LoginScreen> {
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
-            builder: (context) =>
-                OtpScreen(phoneNumber: phone, userRole: user.role),
+            builder: (context) => OtpScreen(phoneNumber: phone, userRole: role),
           ),
         );
       }

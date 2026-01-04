@@ -1,9 +1,11 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter/foundation.dart';
 import 'dart:math';
 import '../models/user_model.dart';
 import '../models/bus_model.dart';
 import '../models/route_model.dart';
 import '../models/bus_location_model.dart';
+import '../models/vehicle_state_model.dart';
 import '../models/bus_stop_model.dart';
 import 'supabase_service.dart';
 
@@ -40,11 +42,14 @@ class SupabaseQueries {
 
   /// Get user by phone number
   Future<UserModel?> getUserByPhone(String phoneNumber) async {
+    debugPrint('Querying user by phone: $phoneNumber');
     final response = await _client
         .from('users')
         .select()
         .eq('phone', phoneNumber)
         .maybeSingle();
+
+    debugPrint('User query response: $response');
 
     if (response != null) {
       return UserModel.fromJson(response);
@@ -109,7 +114,8 @@ class SupabaseQueries {
         .select()
         .order('name', ascending: true);
 
-    return (response as List).map((bus) => BusModel.fromJson(bus)).toList();
+    final data = response as List<dynamic>? ?? [];
+    return data.map((bus) => BusModel.fromJson(bus)).toList();
   }
 
   /// Get buses by route ID
@@ -120,7 +126,8 @@ class SupabaseQueries {
         .eq('route_id', routeId)
         .order('name', ascending: true);
 
-    return (response as List).map((bus) => BusModel.fromJson(bus)).toList();
+    final data = response as List<dynamic>? ?? [];
+    return data.map((bus) => BusModel.fromJson(bus)).toList();
   }
 
   /// Get available buses only
@@ -131,7 +138,8 @@ class SupabaseQueries {
         .eq('is_available', true)
         .order('name', ascending: true);
 
-    return (response as List).map((bus) => BusModel.fromJson(bus)).toList();
+    final data = response as List<dynamic>? ?? [];
+    return data.map((bus) => BusModel.fromJson(bus)).toList();
   }
 
   /// Get bus by ID
@@ -178,7 +186,8 @@ class SupabaseQueries {
         .or('name.ilike.%$query%,registration_number.ilike.%$query%')
         .order('name', ascending: true);
 
-    return (response as List).map((bus) => BusModel.fromJson(bus)).toList();
+    final data = response as List<dynamic>? ?? [];
+    return data.map((bus) => BusModel.fromJson(bus)).toList();
   }
 
   // ============================================
@@ -192,9 +201,8 @@ class SupabaseQueries {
         .select()
         .order('name', ascending: true);
 
-    return (response as List)
-        .map((route) => RouteModel.fromJson(route))
-        .toList();
+    final data = response as List<dynamic>? ?? [];
+    return data.map((route) => RouteModel.fromJson(route)).toList();
   }
 
   /// Get route by ID
@@ -221,9 +229,8 @@ class SupabaseQueries {
         )
         .order('name', ascending: true);
 
-    return (response as List)
-        .map((route) => RouteModel.fromJson(route))
-        .toList();
+    final data = response as List<dynamic>? ?? [];
+    return data.map((route) => RouteModel.fromJson(route)).toList();
   }
 
   /// Get popular routes (for quick picks)
@@ -235,16 +242,106 @@ class SupabaseQueries {
         .limit(limit)
         .order('name', ascending: true);
 
-    return (response as List)
-        .map((route) => RouteModel.fromJson(route))
-        .toList();
+    final data = response as List<dynamic>? ?? [];
+    return data.map((route) => RouteModel.fromJson(route)).toList();
   }
 
   // ============================================
-  // BUS LOCATION QUERIES
+  // VEHICLE OBSERVATION / STATE QUERIES (GPS Smoothing Pipeline)
+  // ============================================
+  // The GPS smoothing pipeline uses:
+  //   - vehicle_observations: Raw GPS data (write-only)
+  //   - vehicle_state: Smoothed position (read-only, updated by Postgres trigger)
   // ============================================
 
-  /// Update bus location (called by conductor)
+  /// Insert raw GPS observation (triggers server-side smoothing)
+  /// This is the primary method for conductors to report GPS position.
+  /// The Postgres trigger will automatically update vehicle_state.
+  Future<void> insertVehicleObservation({
+    required String busId,
+    required double lat,
+    required double lng,
+    double? accuracyM,
+    double? speedMps,
+    double? headingDeg,
+  }) async {
+    await _client.from('vehicle_observations').insert({
+      'bus_id': busId,
+      'lat': lat,
+      'lng': lng,
+      'accuracy_m': accuracyM,
+      'speed_mps': speedMps,
+      'heading_deg': headingDeg,
+      'observed_at': DateTime.now().toUtc().toIso8601String(),
+    });
+  }
+
+  /// Get current smoothed state of a vehicle
+  Future<VehicleStateModel?> getVehicleState(String busId) async {
+    final response = await _client
+        .from('vehicle_state')
+        .select()
+        .eq('bus_id', busId)
+        .maybeSingle();
+
+    if (response != null) {
+      return VehicleStateModel.fromJson(response);
+    }
+    return null;
+  }
+
+  /// Stream real-time smoothed vehicle state updates
+  /// This is the recommended method for clients to get live position.
+  Stream<VehicleStateModel?> streamVehicleState(String busId) {
+    return _client
+        .from('vehicle_state')
+        .stream(primaryKey: ['bus_id'])
+        .eq('bus_id', busId)
+        .map((data) {
+          if (data.isNotEmpty) {
+            return VehicleStateModel.fromJson(data.first);
+          }
+          return null;
+        });
+  }
+
+  /// Stream all vehicle states (for map view)
+  Stream<List<VehicleStateModel>> streamAllVehicleStates() {
+    return _client
+        .from('vehicle_state')
+        .stream(primaryKey: ['bus_id'])
+        .map(
+          (data) =>
+              data.map((state) => VehicleStateModel.fromJson(state)).toList(),
+        );
+  }
+
+  /// Get vehicle states for buses on a specific route
+  Future<List<VehicleStateModel>> getVehicleStatesOnRoute(
+    String routeId,
+  ) async {
+    final buses = await getBusesByRoute(routeId);
+    final busIds = buses.map((b) => b.id).toList();
+
+    if (busIds.isEmpty) return [];
+
+    final response = await _client
+        .from('vehicle_state')
+        .select()
+        .inFilter('bus_id', busIds);
+
+    final data = response as List<dynamic>? ?? [];
+    return data.map((state) => VehicleStateModel.fromJson(state)).toList();
+  }
+
+  // ============================================
+  // LEGACY BUS LOCATION QUERIES (Deprecated)
+  // ============================================
+  // These methods are kept for backward compatibility.
+  // New code should use vehicle_observations/vehicle_state instead.
+  // ============================================
+
+  /// @deprecated Use insertVehicleObservation instead
   Future<void> updateBusLocation({
     required String busId,
     required double latitude,
@@ -252,71 +349,82 @@ class SupabaseQueries {
     double? speed,
     double? heading,
   }) async {
-    await _client.from('bus_locations').upsert({
-      'bus_id': busId,
-      'latitude': latitude,
-      'longitude': longitude,
-      'speed': speed,
-      'heading': heading,
-      'updated_at': DateTime.now().toIso8601String(),
-    }, onConflict: 'bus_id');
+    // Redirect to new pipeline
+    await insertVehicleObservation(
+      busId: busId,
+      lat: latitude,
+      lng: longitude,
+      speedMps: speed != null ? speed / 3.6 : null, // Convert km/h to m/s
+      headingDeg: heading,
+    );
   }
 
-  /// Get current location of a bus
+  /// @deprecated Use getVehicleState instead
   Future<BusLocationModel?> getBusLocation(String busId) async {
-    final response = await _client
-        .from('bus_locations')
-        .select()
-        .eq('bus_id', busId)
-        .maybeSingle();
-
-    if (response != null) {
-      return BusLocationModel.fromJson(response);
+    final state = await getVehicleState(busId);
+    if (state != null) {
+      // Convert VehicleStateModel to BusLocationModel for compatibility
+      return BusLocationModel(
+        busId: state.busId,
+        latitude: state.lat,
+        longitude: state.lng,
+        speed: state.speedKmh,
+        heading: state.headingDeg,
+        updatedAt: state.updatedAt,
+      );
     }
     return null;
   }
 
-  /// Stream real-time bus location updates
+  /// @deprecated Use streamVehicleState instead
   Stream<BusLocationModel?> streamBusLocation(String busId) {
-    return _client
-        .from('bus_locations')
-        .stream(primaryKey: ['bus_id'])
-        .eq('bus_id', busId)
-        .map((data) {
-          if (data.isNotEmpty) {
-            return BusLocationModel.fromJson(data.first);
-          }
-          return null;
-        });
-  }
-
-  /// Stream all bus locations (for map view)
-  Stream<List<BusLocationModel>> streamAllBusLocations() {
-    return _client
-        .from('bus_locations')
-        .stream(primaryKey: ['bus_id'])
-        .map(
-          (data) => data
-              .map((location) => BusLocationModel.fromJson(location))
-              .toList(),
+    return streamVehicleState(busId).map((state) {
+      if (state != null) {
+        return BusLocationModel(
+          busId: state.busId,
+          latitude: state.lat,
+          longitude: state.lng,
+          speed: state.speedKmh,
+          heading: state.headingDeg,
+          updatedAt: state.updatedAt,
         );
+      }
+      return null;
+    });
   }
 
-  /// Get locations of buses on a specific route
+  /// @deprecated Use streamAllVehicleStates instead
+  Stream<List<BusLocationModel>> streamAllBusLocations() {
+    return streamAllVehicleStates().map(
+      (states) => states
+          .map(
+            (state) => BusLocationModel(
+              busId: state.busId,
+              latitude: state.lat,
+              longitude: state.lng,
+              speed: state.speedKmh,
+              heading: state.headingDeg,
+              updatedAt: state.updatedAt,
+            ),
+          )
+          .toList(),
+    );
+  }
+
+  /// @deprecated Use getVehicleStatesOnRoute instead
   Future<List<BusLocationModel>> getBusLocationsOnRoute(String routeId) async {
-    // First get all buses on this route
-    final buses = await getBusesByRoute(routeId);
-    final busIds = buses.map((b) => b.id).toList();
-
-    if (busIds.isEmpty) return [];
-
-    final response = await _client
-        .from('bus_locations')
-        .select()
-        .inFilter('bus_id', busIds);
-
-    return (response as List)
-        .map((location) => BusLocationModel.fromJson(location))
+    final states = await getVehicleStatesOnRoute(routeId);
+    return states
+        .map(
+          (state) => BusLocationModel(
+            busId: state.busId,
+            latitude: state.lat,
+            longitude: state.lng,
+            speed: state.speedKmh,
+            heading: state.headingDeg,
+            updatedAt: state.updatedAt,
+          ),
+        )
         .toList();
   }
 
@@ -345,7 +453,7 @@ class SupabaseQueries {
     return response.count;
   }
 
-  /// Get buses on a route with their current locations
+  /// Get buses on a route with their current smoothed states
   Future<List<Map<String, dynamic>>> getBusesWithLocations(
     String routeId,
   ) async {
@@ -353,11 +461,12 @@ class SupabaseQueries {
         .from('buses')
         .select('''
           *,
-          bus_locations (*)
+          vehicle_state (*)
         ''')
         .eq('route_id', routeId);
 
-    return List<Map<String, dynamic>>.from(response);
+    final data = response as List<dynamic>? ?? [];
+    return List<Map<String, dynamic>>.from(data);
   }
 
   // ============================================
@@ -372,7 +481,8 @@ class SupabaseQueries {
         .eq('role', 'conductor')
         .order('name', ascending: true);
 
-    return (response as List).map((user) => UserModel.fromJson(user)).toList();
+    final data = response as List<dynamic>? ?? [];
+    return data.map((user) => UserModel.fromJson(user)).toList();
   }
 
   /// Assign a bus to a conductor (updates both user and bus tables)
@@ -429,8 +539,8 @@ class SupabaseQueries {
     // First remove conductor assignments
     await _client.from('users').update({'bus_id': null}).eq('bus_id', busId);
 
-    // Delete bus location if exists
-    await _client.from('bus_locations').delete().eq('bus_id', busId);
+    // Delete vehicle state if exists (observations are kept for audit)
+    await _client.from('vehicle_state').delete().eq('bus_id', busId);
 
     // Delete the bus
     await _client.from('buses').delete().eq('id', busId);
@@ -477,69 +587,60 @@ class SupabaseQueries {
   }
 
   // ============================================
-  // BUS STOP QUERIES
+  // BUS STOP QUERIES (Updated for JSONB in Routes)
   // ============================================
 
-  /// Get all bus stops
+  /// Get all bus stops (aggregated from all routes)
   Future<List<BusStopModel>> getAllBusStops() async {
-    final response = await _client
-        .from('bus_stops')
-        .select()
-        .order('name', ascending: true);
-
-    return (response as List)
-        .map((stop) => BusStopModel.fromJson(stop))
-        .toList();
-  }
-
-  /// Get bus stops by route
-  Future<List<BusStopModel>> getBusStopsByRoute(String routeId) async {
-    final response = await _client
-        .from('bus_stops')
-        .select()
-        .eq('route_id', routeId)
-        .order('order_index', ascending: true);
-
-    return (response as List)
-        .map((stop) => BusStopModel.fromJson(stop))
-        .toList();
-  }
-
-  /// Get a single bus stop
-  Future<BusStopModel?> getBusStopById(String stopId) async {
-    final response = await _client
-        .from('bus_stops')
-        .select()
-        .eq('id', stopId)
-        .maybeSingle();
-
-    if (response != null) {
-      return BusStopModel.fromJson(response);
+    final routes = await getAllRoutes();
+    final allStops = <BusStopModel>[];
+    for (var route in routes) {
+      for (var stop in route.busStops) {
+        // We ensure the stop has the routeId attached for context
+        allStops.add(stop.copyWith(routeId: route.id));
+      }
     }
-    return null;
+    // Sort by name
+    allStops.sort((a, b) => a.name.compareTo(b.name));
+    return allStops;
   }
 
-  /// Create a new bus stop
-  Future<BusStopModel> createBusStop({
+  /// Add a new bus stop to a route
+  Future<void> createBusStop({
     required String name,
     required double latitude,
     required double longitude,
     String? routeId,
     int? orderIndex,
   }) async {
-    final response = await _client
-        .from('bus_stops')
-        .insert({
-          'name': name,
-          'latitude': latitude,
-          'longitude': longitude,
-          'route_id': routeId,
-          'order_index': orderIndex,
-        })
-        .select()
-        .single();
+    if (routeId == null) {
+      throw Exception('Route ID is required to add a stop');
+    }
 
-    return BusStopModel.fromJson(response);
+    final routeResponse = await _client
+        .from('routes')
+        .select()
+        .eq('id', routeId)
+        .single();
+    final route = RouteModel.fromJson(routeResponse);
+
+    // Simple ID generation since it's a JSON array
+    final newStop = BusStopModel(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      name: name,
+      latitude: latitude,
+      longitude: longitude,
+      routeId: routeId,
+      orderIndex: orderIndex,
+      createdAt: DateTime.now(),
+    );
+
+    final updatedStops = List<BusStopModel>.from(route.busStops)..add(newStop);
+
+    await _client
+        .from('routes')
+        .update({'bus_stops': updatedStops.map((s) => s.toJson()).toList()})
+        .eq('id', routeId);
   }
 
   /// Update a bus stop
@@ -547,12 +648,70 @@ class SupabaseQueries {
     String stopId,
     Map<String, dynamic> updates,
   ) async {
-    await _client.from('bus_stops').update(updates).eq('id', stopId);
+    // We need the route_id to find the route
+    final routeId = updates['route_id'];
+    if (routeId == null) {
+      throw Exception('Route ID is required to update a stop');
+    }
+
+    final routeResponse = await _client
+        .from('routes')
+        .select()
+        .eq('id', routeId)
+        .single();
+    final route = RouteModel.fromJson(routeResponse);
+
+    final updatedStops = route.busStops.map((s) {
+      if (s.id == stopId) {
+        return s.copyWith(
+          name: updates['name'],
+          latitude: updates['latitude'],
+          longitude: updates['longitude'],
+          orderIndex: updates['order_index'],
+        );
+      }
+      return s;
+    }).toList();
+
+    await _client
+        .from('routes')
+        .update({'bus_stops': updatedStops.map((s) => s.toJson()).toList()})
+        .eq('id', routeId);
   }
 
   /// Delete a bus stop
-  Future<void> deleteBusStop(String stopId) async {
-    await _client.from('bus_stops').delete().eq('id', stopId);
+  Future<void> deleteBusStop(String stopId, String? routeId) async {
+    // If routeId is provided, use it directly (efficient)
+    // If not, we have to search all routes (inefficient but safe fallback)
+
+    if (routeId != null) {
+      await _deleteStopFromRoute(routeId, stopId);
+    } else {
+      // Fallback search
+      final routes = await getAllRoutes();
+      for (var route in routes) {
+        if (route.busStops.any((s) => s.id == stopId)) {
+          await _deleteStopFromRoute(route.id, stopId);
+          return;
+        }
+      }
+    }
+  }
+
+  Future<void> _deleteStopFromRoute(String routeId, String stopId) async {
+    final routeResponse = await _client
+        .from('routes')
+        .select()
+        .eq('id', routeId)
+        .single();
+    final route = RouteModel.fromJson(routeResponse);
+
+    final updatedStops = route.busStops.where((s) => s.id != stopId).toList();
+
+    await _client
+        .from('routes')
+        .update({'bus_stops': updatedStops.map((s) => s.toJson()).toList()})
+        .eq('id', routeId);
   }
 
   /// Get nearest bus stops to a location

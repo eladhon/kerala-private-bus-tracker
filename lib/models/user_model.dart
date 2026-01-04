@@ -19,10 +19,10 @@ class UserModel {
   /// Create UserModel from JSON (Supabase response)
   factory UserModel.fromJson(Map<String, dynamic> json) {
     return UserModel(
-      id: json['id'] as String,
-      phone: json['phone'] as String,
-      name: json['name'] as String,
-      role: json['role'] as String,
+      id: json['id'] as String? ?? '',
+      phone: json['phone'] as String? ?? '',
+      name: json['name'] as String? ?? 'Unknown User',
+      role: json['role'] as String? ?? 'user',
       busId: json['bus_id'] as String?,
       createdAt: json['created_at'] != null
           ? DateTime.parse(json['created_at'] as String)

@@ -1,10 +1,12 @@
+import 'bus_stop_model.dart';
+
 /// Route model representing a bus route
 class RouteModel {
   final String id;
   final String name;
   final String startLocation;
   final String endLocation;
-  final List<String> stops;
+  final List<BusStopModel> busStops;
   final double? distance; // in kilometers
   final bool isPopular;
   final DateTime? createdAt;
@@ -14,7 +16,7 @@ class RouteModel {
     required this.name,
     required this.startLocation,
     required this.endLocation,
-    this.stops = const [],
+    this.busStops = const [],
     this.distance,
     this.isPopular = false,
     this.createdAt,
@@ -23,12 +25,14 @@ class RouteModel {
   /// Create RouteModel from JSON (Supabase response)
   factory RouteModel.fromJson(Map<String, dynamic> json) {
     return RouteModel(
-      id: json['id'] as String,
-      name: json['name'] as String,
-      startLocation: json['start_location'] as String,
-      endLocation: json['end_location'] as String,
-      stops: json['stops'] != null
-          ? List<String>.from(json['stops'] as List)
+      id: json['id'] as String? ?? '',
+      name: json['name'] as String? ?? 'Unknown Route',
+      startLocation: json['start_location'] as String? ?? '',
+      endLocation: json['end_location'] as String? ?? '',
+      busStops: (json['stops'] ?? json['bus_stops']) != null
+          ? ((json['stops'] ?? json['bus_stops']) as List)
+                .map((e) => BusStopModel.fromJson(e as Map<String, dynamic>))
+                .toList()
           : [],
       distance: json['distance'] != null
           ? (json['distance'] as num).toDouble()
@@ -47,7 +51,7 @@ class RouteModel {
       'name': name,
       'start_location': startLocation,
       'end_location': endLocation,
-      'stops': stops,
+      'bus_stops': busStops.map((stop) => stop.toJson()).toList(),
       'distance': distance,
       'is_popular': isPopular,
     };
@@ -57,7 +61,7 @@ class RouteModel {
   String get displayName => '$startLocation → $endLocation';
 
   /// Get number of stops
-  int get stopCount => stops.length;
+  int get stopCount => busStops.length;
 
   /// Copy with new values
   RouteModel copyWith({
@@ -65,7 +69,7 @@ class RouteModel {
     String? name,
     String? startLocation,
     String? endLocation,
-    List<String>? stops,
+    List<BusStopModel>? busStops,
     double? distance,
     bool? isPopular,
     DateTime? createdAt,
@@ -75,7 +79,7 @@ class RouteModel {
       name: name ?? this.name,
       startLocation: startLocation ?? this.startLocation,
       endLocation: endLocation ?? this.endLocation,
-      stops: stops ?? this.stops,
+      busStops: busStops ?? this.busStops,
       distance: distance ?? this.distance,
       isPopular: isPopular ?? this.isPopular,
       createdAt: createdAt ?? this.createdAt,

@@ -29,8 +29,14 @@ class _ConductorHomeScreenState extends State<ConductorHomeScreen> {
   bool _isLoading = true;
   bool _hasLocationPermission = false;
 
-  // Update interval in seconds
-  static const int _updateIntervalSeconds = 10;
+  // Server upload tracking
+  // Raw GPS is now sent to server; smoothing happens via Postgres trigger
+  DateTime _lastUploadTime = DateTime.fromMillisecondsSinceEpoch(0);
+
+  // Local update interval (for UI display)
+  static const int _localUpdateIntervalSeconds = 2;
+  // Server upload interval (raw GPS sent every 15s, smoothed by Postgres)
+  static const int _serverUploadIntervalSeconds = 15;
 
   @override
   void initState() {
@@ -106,9 +112,9 @@ class _ConductorHomeScreenState extends State<ConductorHomeScreen> {
     // Get initial position
     await _updateLocation();
 
-    // Start timer-based tracking every 10 seconds
+    // Start timer-based tracking
     _locationTimer = Timer.periodic(
-      const Duration(seconds: _updateIntervalSeconds),
+      const Duration(seconds: _localUpdateIntervalSeconds),
       (_) => _updateLocation(),
     );
   }
@@ -116,23 +122,33 @@ class _ConductorHomeScreenState extends State<ConductorHomeScreen> {
   Future<void> _updateLocation() async {
     try {
       final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+        ),
       );
 
+      // Store raw position for local UI display
+      // Server-side smoothing handles the canonical state
       setState(() => _currentPosition = position);
 
       // Center map on current position
       _mapController.move(LatLng(position.latitude, position.longitude), 15);
 
-      // Update bus location in database
-      if (_assignedBus != null) {
-        await _queries.updateBusLocation(
+      // Throttled upload of RAW GPS to server
+      // The Postgres trigger will apply EMA smoothing
+      final now = DateTime.now();
+      if (_assignedBus != null &&
+          now.difference(_lastUploadTime).inSeconds >=
+              _serverUploadIntervalSeconds) {
+        await _queries.insertVehicleObservation(
           busId: _assignedBus!.id,
-          latitude: position.latitude,
-          longitude: position.longitude,
-          speed: position.speed * 3.6, // Convert m/s to km/h
-          heading: position.heading,
+          lat: position.latitude,
+          lng: position.longitude,
+          accuracyM: position.accuracy,
+          speedMps: position.speed, // Already in m/s from Geolocator
+          headingDeg: position.heading,
         );
+        _lastUploadTime = now;
       }
     } catch (e) {
       debugPrint('Error updating location: $e');
@@ -389,7 +405,7 @@ class _ConductorHomeScreenState extends State<ConductorHomeScreen> {
                               ),
                               Text(
                                 _isTracking
-                                    ? 'Updating every $_updateIntervalSeconds seconds'
+                                    ? 'Uploading raw GPS every $_serverUploadIntervalSeconds s (server smoothed)'
                                     : 'Start tracking to share location',
                                 style: TextStyle(
                                   color: Colors.grey.shade600,
