@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:latlong2/latlong.dart';
 import '../../services/supabase_queries.dart';
 import '../../models/bus_model.dart';
 import '../../models/user_model.dart';
 import '../../models/route_model.dart';
-import '../../models/bus_stop_model.dart';
+import '../../models/stop_model.dart';
+import '../../widgets/location_picker.dart';
 import 'admin_login_screen.dart';
 
 /// Admin home screen with dashboard and management tabs
@@ -23,7 +25,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
   List<BusModel> _buses = [];
   List<UserModel> _conductors = [];
   List<RouteModel> _routes = [];
-  List<BusStopModel> _busStops = [];
+  List<StopModel> _busStops = [];
   String? _selectedRouteIdForStops;
   bool _isLoading = true;
   int _availableBusCount = 0;
@@ -54,7 +56,6 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
         _conductors = conductors;
         _routes = routes;
         _busStops = stops;
-        _busStops = stops; // Kept for stats
         _availableBusCount = buses.where((b) => b.isAvailable).length;
 
         // Initialize selected route if needed
@@ -437,82 +438,104 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
   // ============================================
 
   Future<void> _showEditBusStopDialog(
-    BusStopModel stop, {
+    StopModel stop, {
     required String routeId,
   }) async {
     final nameController = TextEditingController(text: stop.name);
-    final latController = TextEditingController(text: stop.latitude.toString());
-    final lngController = TextEditingController(
-      text: stop.longitude.toString(),
-    );
+    LatLng selectedLocation = LatLng(stop.lat, stop.lng);
     final orderController = TextEditingController(
       text: stop.orderIndex?.toString() ?? '',
     );
 
     final result = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Edit Bus Stop'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameController,
-                decoration: const InputDecoration(
-                  labelText: 'Stop Name',
-                  border: OutlineInputBorder(),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          title: const Text('Edit Bus Stop'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nameController,
+                  decoration: const InputDecoration(
+                    labelText: 'Stop Name',
+                    border: OutlineInputBorder(),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: latController,
-                      decoration: const InputDecoration(
-                        labelText: 'Latitude',
-                        border: OutlineInputBorder(),
-                      ),
-                      keyboardType: TextInputType.number,
+                const SizedBox(height: 16),
+                Card(
+                  margin: EdgeInsets.zero,
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          'Location',
+                          style: Theme.of(context).textTheme.titleSmall,
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            const Icon(Icons.location_on, color: Colors.red),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                '${selectedLocation.latitude.toStringAsFixed(6)}, ${selectedLocation.longitude.toStringAsFixed(6)}',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        OutlinedButton.icon(
+                          onPressed: () async {
+                            final newLocation = await Navigator.push<LatLng>(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => LocationPicker(
+                                  initialLocation: selectedLocation,
+                                ),
+                              ),
+                            );
+                            if (newLocation != null) {
+                              setState(() => selectedLocation = newLocation);
+                            }
+                          },
+                          icon: const Icon(Icons.map),
+                          label: const Text('Change Location on Map'),
+                        ),
+                      ],
                     ),
                   ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: TextField(
-                      controller: lngController,
-                      decoration: const InputDecoration(
-                        labelText: 'Longitude',
-                        border: OutlineInputBorder(),
-                      ),
-                      keyboardType: TextInputType.number,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              // Route is fixed to the current context
-              TextField(
-                controller: orderController,
-                decoration: const InputDecoration(
-                  labelText: 'Order in Route',
-                  border: OutlineInputBorder(),
                 ),
-                keyboardType: TextInputType.number,
-              ),
-            ],
+                const SizedBox(height: 16),
+                // Route is fixed to the current context
+                TextField(
+                  controller: orderController,
+                  decoration: const InputDecoration(
+                    labelText: 'Order in Route',
+                    border: OutlineInputBorder(),
+                  ),
+                  keyboardType: TextInputType.number,
+                ),
+              ],
+            ),
           ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Save'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Save'),
-          ),
-        ],
       ),
     );
 
@@ -520,8 +543,8 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
       try {
         await _queries.updateBusStop(stop.id, {
           'name': nameController.text,
-          'latitude': double.parse(latController.text),
-          'longitude': double.parse(lngController.text),
+          'latitude': selectedLocation.latitude,
+          'longitude': selectedLocation.longitude,
           'route_id': routeId, // Use passed routeId
           'order_index': orderController.text.isNotEmpty
               ? int.tryParse(orderController.text)
@@ -535,10 +558,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
     }
   }
 
-  Future<void> _deleteBusStop(
-    BusStopModel stop, {
-    required String routeId,
-  }) async {
+  Future<void> _deleteBusStop(StopModel stop, {required String routeId}) async {
     final confirm = await _showDeleteConfirmation('Delete "${stop.name}"?');
     if (confirm == true) {
       try {
@@ -1380,7 +1400,7 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
                     style: const TextStyle(fontWeight: FontWeight.w500),
                   ),
                   subtitle: Text(
-                    '${stop.latitude.toStringAsFixed(4)}, ${stop.longitude.toStringAsFixed(4)}',
+                    '${stop.lat.toStringAsFixed(4)}, ${stop.lng.toStringAsFixed(4)}',
                     style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
                   ),
                   trailing: Row(
@@ -1413,89 +1433,136 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
   /// Show add bus stop dialog for a specific route
   Future<void> _showAddBusStopDialogForRoute(String routeId) async {
     final nameController = TextEditingController();
-    final latController = TextEditingController();
-    final lngController = TextEditingController();
+    LatLng? selectedLocation;
     final orderController = TextEditingController();
 
     final result = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Add Bus Stop'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameController,
-                decoration: const InputDecoration(
-                  labelText: 'Stop Name',
-                  hintText: 'e.g., Thrissur Bus Stand',
-                  border: OutlineInputBorder(),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          title: const Text('Add Bus Stop'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                TextField(
+                  controller: nameController,
+                  decoration: const InputDecoration(
+                    labelText: 'Stop Name',
+                    hintText: 'e.g., Thrissur Bus Stand',
+                    border: OutlineInputBorder(),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: latController,
-                      decoration: const InputDecoration(
-                        labelText: 'Latitude',
-                        hintText: '10.5276',
-                        border: OutlineInputBorder(),
-                      ),
-                      keyboardType: TextInputType.number,
+                const SizedBox(height: 16),
+                Card(
+                  margin: EdgeInsets.zero,
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          'Location',
+                          style: Theme.of(context).textTheme.titleSmall,
+                        ),
+                        const SizedBox(height: 8),
+                        if (selectedLocation != null) ...[
+                          Row(
+                            children: [
+                              const Icon(
+                                Icons.location_on,
+                                color: Colors.green,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  '${selectedLocation!.latitude.toStringAsFixed(6)}, ${selectedLocation!.longitude.toStringAsFixed(6)}',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                        ] else
+                          const Padding(
+                            padding: EdgeInsets.only(bottom: 12),
+                            child: Text(
+                              'No location selected',
+                              style: TextStyle(
+                                fontStyle: FontStyle.italic,
+                                color: Colors.grey,
+                              ),
+                            ),
+                          ),
+                        OutlinedButton.icon(
+                          onPressed: () async {
+                            final newLocation = await Navigator.push<LatLng>(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => LocationPicker(
+                                  initialLocation: selectedLocation,
+                                ),
+                              ),
+                            );
+                            if (newLocation != null) {
+                              setState(() => selectedLocation = newLocation);
+                            }
+                          },
+                          icon: const Icon(Icons.map),
+                          label: Text(
+                            selectedLocation == null
+                                ? 'Pick on Map'
+                                : 'Change Location',
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextField(
-                      controller: lngController,
-                      decoration: const InputDecoration(
-                        labelText: 'Longitude',
-                        hintText: '76.2144',
-                        border: OutlineInputBorder(),
-                      ),
-                      keyboardType: TextInputType.number,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: orderController,
-                decoration: const InputDecoration(
-                  labelText: 'Order (optional)',
-                  hintText: '1, 2, 3...',
-                  border: OutlineInputBorder(),
                 ),
-                keyboardType: TextInputType.number,
-              ),
-            ],
+                const SizedBox(height: 16),
+                TextField(
+                  controller: orderController,
+                  decoration: const InputDecoration(
+                    labelText: 'Order (optional)',
+                    hintText: '1, 2, 3...',
+                    border: OutlineInputBorder(),
+                  ),
+                  keyboardType: TextInputType.number,
+                ),
+              ],
+            ),
           ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                if (selectedLocation == null) {
+                  _showError('Please select a location on the map');
+                  return;
+                }
+                Navigator.pop(context, true);
+              },
+              child: const Text('Add'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Add'),
-          ),
-        ],
       ),
     );
 
     if (result == true &&
         nameController.text.isNotEmpty &&
-        latController.text.isNotEmpty &&
-        lngController.text.isNotEmpty) {
+        selectedLocation != null) {
       try {
         await _queries.createBusStop(
           name: nameController.text,
-          latitude: double.parse(latController.text),
-          longitude: double.parse(lngController.text),
+          latitude: selectedLocation!.latitude,
+          longitude: selectedLocation!.longitude,
           routeId: routeId,
           orderIndex: orderController.text.isNotEmpty
               ? int.tryParse(orderController.text)

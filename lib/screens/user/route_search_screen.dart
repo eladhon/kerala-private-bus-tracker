@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import '../../services/supabase_queries.dart';
 import '../../models/bus_model.dart';
-import '../../models/bus_stop_model.dart';
+import '../../models/stop_model.dart';
+import '../../models/route_model.dart';
 import 'bus_tracking_screen.dart';
 
 /// Route search screen with source/destination inputs and bus results
@@ -20,7 +21,7 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
   final _sourceController = TextEditingController();
   final _destController = TextEditingController();
 
-  List<BusStopModel> _allStops = [];
+  List<StopModel> _allStops = [];
   List<BusModel> _foundBuses = [];
   bool _isSearching = false;
   bool _hasSearched = false;
@@ -43,12 +44,44 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
 
   Future<void> _loadStops() async {
     try {
-      final stops = await _queries.getAllBusStops();
+      // Load both standalone stops and stops embedded in routes
+      // This ensures autocomplete works even if stops are only in the JSONB column of routes
+      final results = await Future.wait([
+        _queries.getAllBusStops(),
+        _queries.getAllRoutes(),
+      ]);
+
+      final stops = results[0] as List<StopModel>;
+      final routes = results[1] as List<RouteModel>;
+
+      // Create a map to deduplicate by name (case-insensitive)
+      final Map<String, StopModel> uniqueStops = {};
+
+      // Add standalone stops first
+      for (var stop in stops) {
+        uniqueStops[stop.name.toLowerCase()] = stop;
+      }
+
+      // Add stops from routes (extracted from valid RouteModel which now parses JSONB)
+      for (var route in routes) {
+        for (var stop in route.busStops) {
+          if (!uniqueStops.containsKey(stop.name.toLowerCase())) {
+            uniqueStops[stop.name.toLowerCase()] = stop;
+          }
+        }
+      }
+
       setState(() {
-        _allStops = stops;
+        _allStops = uniqueStops.values.toList()
+          ..sort((a, b) => a.name.compareTo(b.name));
       });
     } catch (e) {
       debugPrint('Error loading stops: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to load bus stops: $e')));
+      }
     }
   }
 
@@ -60,10 +93,24 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
     });
 
     try {
+      // DEBUG: Check if we can see ANY buses at all
+      final allBusesDebug = await _queries.getAllBuses();
+      debugPrint('DEBUG: Global bus count: ${allBusesDebug.length}');
+      if (allBusesDebug.isNotEmpty) {
+        debugPrint('DEBUG: First bus route_id: ${allBusesDebug.first.routeId}');
+        debugPrint('DEBUG: First bus ID: ${allBusesDebug.first.id}');
+      } else {
+        debugPrint(
+          'DEBUG: No buses visible globally. Likely RLS or empty table.',
+        );
+      }
+
       // 1. Get all routes
       final routes = await _queries.getAllRoutes();
       final source = _sourceController.text.toLowerCase().trim();
       final dest = _destController.text.toLowerCase().trim();
+
+      debugPrint('Total routes loaded: ${routes.length}');
 
       // 2. Filter routes that match source and/or destination
       // Ideally this should be backend logic, but doing client-side for now
@@ -84,11 +131,34 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
         return matchSource && matchDest;
       }).toList();
 
+      debugPrint('Matching routes: ${matchingRoutes.length}');
+      if (mounted && matchingRoutes.isEmpty) {
+        // Optional: Feedback for no routes found matching criteria
+        debugPrint('No routes match the criteria: Source=$source, Dest=$dest');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('No routes found matching "$source" to "$dest"'),
+          ),
+        );
+      }
+
       // 3. Get buses for matching routes
       List<BusModel> allBuses = [];
       for (var route in matchingRoutes) {
+        debugPrint('Checking buses for route: ${route.name} (${route.id})');
         final buses = await _queries.getBusesByRoute(route.id);
         allBuses.addAll(buses);
+      }
+
+      debugPrint('Found buses: ${allBuses.length}');
+      if (mounted && matchingRoutes.isNotEmpty && allBuses.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Found ${matchingRoutes.length} routes, but no buses assigned to them.',
+            ),
+          ),
+        );
       }
 
       setState(() {
@@ -96,15 +166,22 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
       });
     } catch (e) {
       debugPrint('Error finding buses: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error finding buses: $e')));
+      }
     } finally {
       setState(() => _isSearching = false);
     }
   }
 
   void _swapLocations() {
-    final temp = _sourceController.text;
-    _sourceController.text = _destController.text;
-    _destController.text = temp;
+    setState(() {
+      final temp = _sourceController.text;
+      _sourceController.text = _destController.text;
+      _destController.text = temp;
+    });
   }
 
   void _onBusTap(BusModel bus) {
@@ -259,9 +336,10 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
   }) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        // Use Autocomplete
-        return Autocomplete<String>(
-          initialValue: TextEditingValue(text: controller.text),
+        // Use RawAutocomplete to control the TextEditingController directly
+        return RawAutocomplete<String>(
+          textEditingController: controller,
+          focusNode: FocusNode(), // Create new or manage if needed
           optionsBuilder: (TextEditingValue textEditingValue) {
             if (textEditingValue.text == '') {
               return const Iterable<String>.empty();
@@ -277,17 +355,51 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
           onSelected: (String selection) {
             controller.text = selection;
           },
+          optionsViewBuilder:
+              (
+                BuildContext context,
+                AutocompleteOnSelected<String> onSelected,
+                Iterable<String> options,
+              ) {
+                return Align(
+                  alignment: Alignment.topLeft,
+                  child: Material(
+                    elevation: 4.0,
+                    // Constrain width to the LayoutBuilder's max width
+                    child: SizedBox(
+                      width: constraints.maxWidth,
+                      height: 200.0,
+                      child: ListView.builder(
+                        padding: EdgeInsets.zero,
+                        itemCount: options.length,
+                        itemBuilder: (BuildContext context, int index) {
+                          final String option = options.elementAt(index);
+                          return InkWell(
+                            onTap: () {
+                              onSelected(option);
+                            },
+                            child: Padding(
+                              padding: const EdgeInsets.all(16.0),
+                              child: Text(option),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                );
+              },
           fieldViewBuilder:
-              (context, textEditingController, focusNode, onFieldSubmitted) {
-                // Sync internal controller with external one if needed
-                if (controller.text != textEditingController.text) {
-                  textEditingController.text = controller.text;
-                }
-
+              (
+                BuildContext context,
+                TextEditingController textEditingController,
+                FocusNode focusNode,
+                VoidCallback onFieldSubmitted,
+              ) {
                 return TextField(
                   controller: textEditingController,
                   focusNode: focusNode,
-                  onChanged: (val) => controller.text = val, // Sync back
+                  onSubmitted: (_) => onFieldSubmitted(),
                   decoration: InputDecoration(
                     hintText: hint,
                     hintStyle: TextStyle(color: Colors.grey.shade400),
@@ -311,9 +423,8 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
                                               accuracy: LocationAccuracy.high,
                                             ),
                                       );
-                                  // For now just set text, in real app we might want to geocode or use coords
+                                  // TODO: Reverse geocoding
                                   controller.text = "Current Location";
-                                  // TODO: Reverse geocoding to get stop name if possible
                                 } catch (e) {
                                   if (context.mounted) {
                                     ScaffoldMessenger.of(context).showSnackBar(
@@ -522,11 +633,6 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
                           fontWeight: FontWeight.w500,
                         ),
                       ),
-                      const SizedBox(width: 8),
-                      // Text(
-                      //   '•  Stop 3', // Example detail
-                      //   style: TextStyle(color: Colors.grey.shade500, fontSize: 12),
-                      // ),
                     ],
                   ),
                 ],
@@ -542,10 +648,6 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
                     fontSize: 13,
                   ),
                 ),
-                // Text(
-                //   '₹ 45', // Price
-                //   style: TextStyle(color: Colors.grey.shade500, fontSize: 11),
-                // ),
               ],
             ),
             const SizedBox(width: 8),

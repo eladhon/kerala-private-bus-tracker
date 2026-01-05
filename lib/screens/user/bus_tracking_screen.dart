@@ -8,7 +8,8 @@ import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import '../../services/supabase_queries.dart';
 import '../../models/bus_model.dart';
-import '../../models/bus_location_model.dart';
+import '../../models/vehicle_state_model.dart';
+import '../../services/routing_service.dart';
 
 /// Live bus tracking screen with real-time map updates
 class BusTrackingScreen extends StatefulWidget {
@@ -26,9 +27,9 @@ class _BusTrackingScreenState extends State<BusTrackingScreen>
   final MapController _mapController = MapController();
 
   // Real-time tracking variables
-  BusLocationModel? _lastPacket;
+  VehicleStateModel? _lastPacket;
   DateTime? _lastPacketTime;
-  BusLocationModel? _interpolatedLocation; // The location we show on UI
+  VehicleStateModel? _interpolatedLocation; // The location we show on UI
 
   // Ticker for smooth animation (dead reckoning)
   late final Ticker _ticker;
@@ -43,47 +44,110 @@ class _BusTrackingScreenState extends State<BusTrackingScreen>
   // Refresh every 10 seconds
   static const int _refreshIntervalSeconds = 10;
 
+  // Route Polyline & Markers
+  List<LatLng> _routePoints = [];
+  List<Marker> _stopMarkers = [];
+  final _routingService = RoutingService();
+
   @override
   void initState() {
     super.initState();
     _ticker = createTicker(_onTick);
     _ticker.start();
     _initializeTracking();
+    _fetchRoutePolyline();
+  }
+
+  Future<void> _fetchRoutePolyline() async {
+    try {
+      final route = await _queries.getRouteById(widget.bus.routeId);
+      if (route != null && route.busStops.isNotEmpty) {
+        // Create markers for stops
+        final markers = route.busStops.map((stop) {
+          return Marker(
+            point: LatLng(stop.lat, stop.lng),
+            width: 12,
+            height: 12,
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.blue, width: 2),
+              ),
+            ),
+          );
+        }).toList();
+
+        if (mounted) {
+          setState(() {
+            _stopMarkers = markers;
+          });
+        }
+
+        // Fetch polyline
+        final points = await _routingService.getRoutePolyline(route.busStops);
+        if (mounted) {
+          setState(() {
+            _routePoints = points;
+          });
+
+          // Animate camera to fit route
+          if (points.isNotEmpty) {
+            _fitRouteToBounds(points);
+          } else if (route.busStops.isNotEmpty) {
+            // Fallback to fitting stops if no polyline
+            final stopPoints = route.busStops
+                .map((s) => LatLng(s.lat, s.lng))
+                .toList();
+            _fitRouteToBounds(stopPoints);
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Error loading route polyline: $e');
+    }
+  }
+
+  void _fitRouteToBounds(List<LatLng> points) {
+    if (points.isEmpty) return;
+
+    final bounds = LatLngBounds.fromPoints(points);
+    // Add some padding so it doesn't touch the edges
+    _mapController.fitCamera(
+      CameraFit.bounds(bounds: bounds, padding: const EdgeInsets.all(50)),
+    );
   }
 
   /// Dead reckoning tick loop (runs every frame)
   void _onTick(Duration elapsed) {
-    if (_lastPacket == null ||
-        _lastPacket?.speed == null ||
-        _lastPacketTime == null) {
+    if (_lastPacket == null || _lastPacketTime == null) {
       return;
     }
 
-    // Only interpolate if moving and data is fresh (< 30s old)
+    // Only interpolate if moving and data is fresh (<30s old)
     // If data is too old, stop moving to avoid showing it driving off the map forever
     final timeSincePacket = DateTime.now().difference(_lastPacketTime!);
-    if (timeSincePacket.inSeconds > 30 || (_lastPacket!.speed ?? 0) < 0.5) {
+    if (timeSincePacket.inSeconds > 30 || _lastPacket!.speedKmh < 0.5) {
       return;
     }
 
-    // Calculate distance moved: Speed (km/h) / 3.6 = m/s
-    // distance = speed * time
-    final speedMs = (_lastPacket!.speed!) / 3.6;
+    // Calculate distance moved: speedMps is already in m/s
+    final speedMs = _lastPacket!.speedMps;
     final elapsedSincePacket = timeSincePacket.inMilliseconds / 1000.0;
 
     // Calculate new lat/lng based on heading and distance
     final newPos = _calculateNewPosition(
-      _lastPacket!.latitude,
-      _lastPacket!.longitude,
+      _lastPacket!.lat,
+      _lastPacket!.lng,
       speedMs,
-      _lastPacket!.heading ?? 0,
+      _lastPacket!.headingDeg,
       elapsedSincePacket,
     );
 
     setState(() {
       _interpolatedLocation = _lastPacket!.copyWith(
-        latitude: newPos.latitude,
-        longitude: newPos.longitude,
+        lat: newPos.latitude,
+        lng: newPos.longitude,
       );
     });
 
@@ -137,7 +201,7 @@ class _BusTrackingScreenState extends State<BusTrackingScreen>
 
     // Start real-time stream for bus location
     _locationSubscription = _queries
-        .streamBusLocation(widget.bus.id)
+        .streamVehicleState(widget.bus.id)
         .listen(
           (location) {
             if (mounted && location != null) {
@@ -189,7 +253,7 @@ class _BusTrackingScreenState extends State<BusTrackingScreen>
 
   Future<void> _fetchBusLocation() async {
     try {
-      final location = await _queries.getBusLocation(widget.bus.id);
+      final location = await _queries.getVehicleState(widget.bus.id);
       if (mounted && location != null) {
         setState(() {
           _lastPacket = location;
@@ -249,6 +313,19 @@ class _BusTrackingScreenState extends State<BusTrackingScreen>
                 urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                 userAgentPackageName: 'com.keralab.bustracker',
               ),
+              // Route Polyline Layer
+              if (_routePoints.isNotEmpty)
+                PolylineLayer(
+                  polylines: [
+                    Polyline(
+                      points: _routePoints,
+                      strokeWidth: 4.0,
+                      color: Colors.blue.withValues(alpha: 0.7),
+                    ),
+                  ],
+                ),
+              // Stop Markers Layer
+              if (_stopMarkers.isNotEmpty) MarkerLayer(markers: _stopMarkers),
               // User location layer with flutter_map_location_marker
               if (_showUserLocation)
                 CurrentLocationLayer(
@@ -493,7 +570,7 @@ class _BusTrackingScreenState extends State<BusTrackingScreen>
                               ),
                               const SizedBox(width: 8),
                               Text(
-                                '${_interpolatedLocation!.latitude.toStringAsFixed(4)}, ${_interpolatedLocation!.longitude.toStringAsFixed(4)}',
+                                '${_interpolatedLocation!.lat.toStringAsFixed(4)}, ${_interpolatedLocation!.lng.toStringAsFixed(4)}',
                                 style: TextStyle(
                                   color: Colors.grey.shade600,
                                   fontFamily: 'monospace',

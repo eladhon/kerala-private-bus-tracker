@@ -1,4 +1,4 @@
-import 'bus_stop_model.dart';
+import 'stop_model.dart';
 
 /// Route model representing a bus route
 class RouteModel {
@@ -6,7 +6,7 @@ class RouteModel {
   final String name;
   final String startLocation;
   final String endLocation;
-  final List<BusStopModel> busStops;
+  final List<StopModel> busStops;
   final double? distance; // in kilometers
   final bool isPopular;
   final DateTime? createdAt;
@@ -24,16 +24,24 @@ class RouteModel {
 
   /// Create RouteModel from JSON (Supabase response)
   factory RouteModel.fromJson(Map<String, dynamic> json) {
+    var loadedStops = <StopModel>[];
+
+    // Handle stops from JSONB column (denormalized)
+    if (json['stops'] != null) {
+      final stopsJson = json['stops'];
+      if (stopsJson is List) {
+        loadedStops = stopsJson
+            .map((e) => StopModel.fromJson(e as Map<String, dynamic>))
+            .toList();
+      }
+    }
+
     return RouteModel(
       id: json['id'] as String? ?? '',
       name: json['name'] as String? ?? 'Unknown Route',
       startLocation: json['start_location'] as String? ?? '',
       endLocation: json['end_location'] as String? ?? '',
-      busStops: (json['stops'] ?? json['bus_stops']) != null
-          ? ((json['stops'] ?? json['bus_stops']) as List)
-                .map((e) => BusStopModel.fromJson(e as Map<String, dynamic>))
-                .toList()
-          : [],
+      busStops: loadedStops,
       distance: json['distance'] != null
           ? (json['distance'] as num).toDouble()
           : null,
@@ -69,7 +77,7 @@ class RouteModel {
     String? name,
     String? startLocation,
     String? endLocation,
-    List<BusStopModel>? busStops,
+    List<StopModel>? busStops,
     double? distance,
     bool? isPopular,
     DateTime? createdAt,

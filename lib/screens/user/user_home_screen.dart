@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../services/supabase_queries.dart';
 import '../../models/bus_model.dart';
-import '../../models/route_model.dart';
 import 'bus_tracking_screen.dart';
 import 'route_search_screen.dart';
 import '../auth/login_screen.dart';
@@ -19,8 +18,6 @@ class UserHomeScreen extends StatefulWidget {
 class _UserHomeScreenState extends State<UserHomeScreen> {
   final _queries = SupabaseQueries();
   List<BusModel> _availableBuses = [];
-  // ignore: unused_field - used for future enhancements
-  List<RouteModel> _popularRoutes = [];
   bool _isLoading = true;
   int _currentIndex = 0;
 
@@ -46,10 +43,8 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
     setState(() => _isLoading = true);
     try {
       final buses = await _queries.getAvailableBuses();
-      final routes = await _queries.getPopularRoutes();
       setState(() {
         _availableBuses = buses;
-        _popularRoutes = routes;
       });
     } catch (e) {
       // Handle error silently for demo
