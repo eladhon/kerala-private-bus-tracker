@@ -8,6 +8,7 @@ import '../../models/route_model.dart';
 import '../../models/stop_model.dart';
 import '../../widgets/location_picker.dart';
 import 'admin_login_screen.dart';
+import 'route_stop_manager.dart';
 
 /// Admin home screen with dashboard and management tabs
 class AdminHomeScreen extends StatefulWidget {
@@ -1341,9 +1342,9 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
                   ),
                   const Spacer(),
                   TextButton.icon(
-                    onPressed: () => _showAddBusStopDialogForRoute(route.id),
-                    icon: const Icon(Icons.add, size: 18),
-                    label: const Text('Add Stop'),
+                    onPressed: () => _openRouteStopManager(route),
+                    icon: const Icon(Icons.map, size: 18),
+                    label: const Text('Manage Stops on Map'),
                     style: TextButton.styleFrom(
                       foregroundColor: const Color(0xFF1a237e),
                       padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -1430,149 +1431,15 @@ class _AdminHomeScreenState extends State<AdminHomeScreen>
     );
   }
 
-  /// Show add bus stop dialog for a specific route
-  Future<void> _showAddBusStopDialogForRoute(String routeId) async {
-    final nameController = TextEditingController();
-    LatLng? selectedLocation;
-    final orderController = TextEditingController();
-
-    final result = await showDialog<bool>(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setState) => AlertDialog(
-          title: const Text('Add Bus Stop'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                TextField(
-                  controller: nameController,
-                  decoration: const InputDecoration(
-                    labelText: 'Stop Name',
-                    hintText: 'e.g., Thrissur Bus Stand',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Card(
-                  margin: EdgeInsets.zero,
-                  child: Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Text(
-                          'Location',
-                          style: Theme.of(context).textTheme.titleSmall,
-                        ),
-                        const SizedBox(height: 8),
-                        if (selectedLocation != null) ...[
-                          Row(
-                            children: [
-                              const Icon(
-                                Icons.location_on,
-                                color: Colors.green,
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  '${selectedLocation!.latitude.toStringAsFixed(6)}, ${selectedLocation!.longitude.toStringAsFixed(6)}',
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 12),
-                        ] else
-                          const Padding(
-                            padding: EdgeInsets.only(bottom: 12),
-                            child: Text(
-                              'No location selected',
-                              style: TextStyle(
-                                fontStyle: FontStyle.italic,
-                                color: Colors.grey,
-                              ),
-                            ),
-                          ),
-                        OutlinedButton.icon(
-                          onPressed: () async {
-                            final newLocation = await Navigator.push<LatLng>(
-                              context,
-                              MaterialPageRoute(
-                                builder: (context) => LocationPicker(
-                                  initialLocation: selectedLocation,
-                                ),
-                              ),
-                            );
-                            if (newLocation != null) {
-                              setState(() => selectedLocation = newLocation);
-                            }
-                          },
-                          icon: const Icon(Icons.map),
-                          label: Text(
-                            selectedLocation == null
-                                ? 'Pick on Map'
-                                : 'Change Location',
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: orderController,
-                  decoration: const InputDecoration(
-                    labelText: 'Order (optional)',
-                    hintText: '1, 2, 3...',
-                    border: OutlineInputBorder(),
-                  ),
-                  keyboardType: TextInputType.number,
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                if (selectedLocation == null) {
-                  _showError('Please select a location on the map');
-                  return;
-                }
-                Navigator.pop(context, true);
-              },
-              child: const Text('Add'),
-            ),
-          ],
-        ),
+  /// Navigate to the Route Stop Manager screen
+  void _openRouteStopManager(RouteModel route) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => RouteStopManagerScreen(route: route),
       ),
     );
-
-    if (result == true &&
-        nameController.text.isNotEmpty &&
-        selectedLocation != null) {
-      try {
-        await _queries.createBusStop(
-          name: nameController.text,
-          latitude: selectedLocation!.latitude,
-          longitude: selectedLocation!.longitude,
-          routeId: routeId,
-          orderIndex: orderController.text.isNotEmpty
-              ? int.tryParse(orderController.text)
-              : null,
-        );
-        await _loadData();
-        _showSuccess('Bus stop added');
-      } catch (e) {
-        _showError('Failed to add bus stop: $e');
-      }
-    }
+    // Refresh data when returning, as stops might have changed
+    _loadData();
   }
 }

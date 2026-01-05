@@ -34,12 +34,7 @@ class RoutingService {
       // Add timeout to prevent hanging indefinitely
       // Add User-Agent header which is often required by OSM services
       final response = await http
-          .get(
-            url,
-            headers: {
-              'User-Agent': 'KeralaBusTracker/1.0 (bennykutty@example.com)',
-            },
-          )
+          .get(url, headers: {'User-Agent': 'KeralaBusTracker/1.0'})
           .timeout(
             const Duration(seconds: 15),
             onTimeout: () {
