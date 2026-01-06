@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:geocoding/geocoding.dart';
+
 import '../../services/supabase_queries.dart';
 import '../../models/bus_model.dart';
 import '../../models/stop_model.dart';
@@ -25,6 +27,7 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
   List<BusModel> _foundBuses = [];
   bool _isSearching = false;
   bool _hasSearched = false;
+  bool _isResolvingLocation = false;
 
   @override
   void initState() {
@@ -187,8 +190,105 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
   void _onBusTap(BusModel bus) {
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (context) => BusTrackingScreen(bus: bus)),
+      MaterialPageRoute(
+        builder: (context) => BusTrackingScreen(
+          bus: bus,
+          userSourceStop: _sourceController.text.isNotEmpty
+              ? _sourceController.text
+              : null,
+          userDestStop: _destController.text.isNotEmpty
+              ? _destController.text
+              : null,
+        ),
+      ),
     );
+  }
+
+  Future<void> _handleLocationSelection(
+    String selection,
+    TextEditingController controller,
+  ) async {
+    // 1. Check for "Use Current Location"
+    if (selection == 'Use Current Location') {
+      setState(() => _isResolvingLocation = true);
+      try {
+        final hasPermission = await _checkLocationPermission();
+        if (!hasPermission) return;
+
+        final position = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.medium,
+          ),
+        );
+        // Find nearest stop
+        final stops = await _queries.getNearestBusStops(
+          position.latitude,
+          position.longitude,
+          limit: 1,
+        );
+        if (stops.isNotEmpty && mounted) {
+          controller.text = stops.first.name;
+        } else if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('No bus stops found near you')),
+          );
+          // Fallback to coordinates? No, need stop name for routing.
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text('Error: $e')));
+        }
+      } finally {
+        if (mounted) setState(() => _isResolvingLocation = false);
+      }
+      return; // Done
+    }
+
+    // 2. Check for "Search for '...'"
+    if (selection.startsWith('Search for: ')) {
+      final query = selection
+          .replaceFirst('Search for: ', '')
+          .replaceAll("'", "");
+      setState(() => _isResolvingLocation = true);
+      try {
+        // Geocoding
+        final locations = await locationFromAddress(query);
+        if (locations.isNotEmpty) {
+          final loc = locations.first;
+          // Find nearest stop to this location
+          final stops = await _queries.getNearestBusStops(
+            loc.latitude,
+            loc.longitude,
+            limit: 1,
+          );
+          if (stops.isNotEmpty && mounted) {
+            controller.text = stops.first.name;
+          } else if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text("No bus stops found near '$query'")),
+            );
+          }
+        } else if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text("Could not find location '$query'")),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text("Geocoding failed: $e")));
+        }
+      } finally {
+        if (mounted) setState(() => _isResolvingLocation = false);
+      }
+      return;
+    }
+
+    // 3. Regular stop selection
+    controller.text = selection;
   }
 
   Future<bool> _checkLocationPermission() async {
@@ -234,7 +334,7 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.grey.shade50,
+      // Background handled by theme
       body: SafeArea(
         child: Column(
           children: [
@@ -252,13 +352,11 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-      child: const Text(
+      child: Text(
         'Route',
-        style: TextStyle(
-          fontSize: 24,
-          fontWeight: FontWeight.bold,
-          color: Colors.black87,
-        ),
+        style: Theme.of(
+          context,
+        ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold),
       ),
     );
   }
@@ -271,7 +369,7 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
         children: [
           Container(
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: Theme.of(context).colorScheme.surfaceContainer,
               borderRadius: BorderRadius.circular(16),
               boxShadow: [
                 BoxShadow(
@@ -290,7 +388,11 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
                   isTop: true,
                   showGpsIcon: true,
                 ),
-                Divider(height: 1, color: Colors.grey.shade200, indent: 48),
+                Divider(
+                  height: 1,
+                  color: Theme.of(context).colorScheme.outlineVariant,
+                  indent: 48,
+                ),
                 _buildAutocompleteField(
                   controller: _destController,
                   hint: 'Destination stop',
@@ -308,9 +410,11 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
                 width: 40,
                 height: 40,
                 decoration: BoxDecoration(
-                  color: Colors.grey.shade100,
+                  color: Theme.of(context).colorScheme.surfaceContainerHigh,
                   shape: BoxShape.circle,
-                  border: Border.all(color: Colors.grey.shade300),
+                  border: Border.all(
+                    color: Theme.of(context).colorScheme.outlineVariant,
+                  ),
                   boxShadow: [
                     BoxShadow(
                       color: Colors.black.withValues(alpha: 0.05),
@@ -318,7 +422,10 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
                     ),
                   ],
                 ),
-                child: const Icon(Icons.swap_vert, color: Color(0xFF1B5E20)),
+                child: Icon(
+                  Icons.swap_vert,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
               ),
             ),
           ),
@@ -336,66 +443,110 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
   }) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        // Use RawAutocomplete to control the TextEditingController directly
         return RawAutocomplete<String>(
           textEditingController: controller,
-          focusNode: FocusNode(), // Create new or manage if needed
+          focusNode: FocusNode(),
           optionsBuilder: (TextEditingValue textEditingValue) {
-            if (textEditingValue.text == '') {
-              return const Iterable<String>.empty();
-            }
-            return _allStops
+            final query = textEditingValue.text;
+            // Base stops list
+            final stops = _allStops
                 .where(
-                  (stop) => stop.name.toLowerCase().contains(
-                    textEditingValue.text.toLowerCase(),
-                  ),
+                  (stop) =>
+                      stop.name.toLowerCase().contains(query.toLowerCase()),
                 )
                 .map((stop) => stop.name);
+
+            // Special Options
+            final List<String> options = [];
+
+            // 1. "Use Current Location" always at top if query is empty or partially matching "current"
+            if (query.isEmpty ||
+                'use current location'.contains(query.toLowerCase())) {
+              options.add('Use Current Location');
+            }
+
+            // 2. Bus stops
+            options.addAll(stops);
+
+            // 3. Landmark search option (if query is not empty and not matching a stop perfectly)
+            if (query.isNotEmpty) {
+              // Verify it's not already an exact match
+              final exactMatch = _allStops.any(
+                (s) => s.name.toLowerCase() == query.toLowerCase(),
+              );
+              if (!exactMatch) {
+                options.add("Search for: '$query'");
+              }
+            }
+
+            return options;
           },
           onSelected: (String selection) {
-            controller.text = selection;
+            _handleLocationSelection(selection, controller);
           },
-          optionsViewBuilder:
-              (
-                BuildContext context,
-                AutocompleteOnSelected<String> onSelected,
-                Iterable<String> options,
-              ) {
-                return Align(
-                  alignment: Alignment.topLeft,
-                  child: Material(
-                    elevation: 4.0,
-                    // Constrain width to the LayoutBuilder's max width
-                    child: SizedBox(
-                      width: constraints.maxWidth,
-                      height: 200.0,
-                      child: ListView.builder(
-                        padding: EdgeInsets.zero,
-                        itemCount: options.length,
-                        itemBuilder: (BuildContext context, int index) {
-                          final String option = options.elementAt(index);
-                          return InkWell(
-                            onTap: () {
-                              onSelected(option);
-                            },
-                            child: Padding(
-                              padding: const EdgeInsets.all(16.0),
-                              child: Text(option),
+          optionsViewBuilder: (context, onSelected, options) {
+            return Align(
+              alignment: Alignment.topLeft,
+              child: Material(
+                elevation: 4.0,
+                child: SizedBox(
+                  width: constraints.maxWidth,
+                  height: 250.0, // Taller for more options
+                  child: ListView.builder(
+                    padding: EdgeInsets.zero,
+                    itemCount: options.length,
+                    itemBuilder: (BuildContext context, int index) {
+                      final String option = options.elementAt(index);
+
+                      // Custom styling for special options
+                      if (option == 'Use Current Location') {
+                        return ListTile(
+                          leading: const Icon(
+                            Icons.my_location,
+                            color: Colors.blue,
+                          ),
+                          title: const Text(
+                            'Use Current Location',
+                            style: TextStyle(
+                              color: Colors.blue,
+                              fontWeight: FontWeight.bold,
                             ),
-                          );
-                        },
-                      ),
-                    ),
+                          ),
+                          onTap: () => onSelected(option),
+                        );
+                      }
+
+                      if (option.startsWith('Search for: ')) {
+                        return ListTile(
+                          leading: const Icon(
+                            Icons.search,
+                            color: Colors.orange,
+                          ),
+                          title: Text(
+                            option,
+                            style: const TextStyle(fontStyle: FontStyle.italic),
+                          ),
+                          onTap: () => onSelected(option),
+                        );
+                      }
+
+                      return ListTile(
+                        leading: const Icon(
+                          Icons.directions_bus,
+                          size: 20,
+                          color: Colors.grey,
+                        ),
+                        title: Text(option),
+                        onTap: () => onSelected(option),
+                      );
+                    },
                   ),
-                );
-              },
+                ),
+              ),
+            );
+          },
           fieldViewBuilder:
-              (
-                BuildContext context,
-                TextEditingController textEditingController,
-                FocusNode focusNode,
-                VoidCallback onFieldSubmitted,
-              ) {
+              (context, textEditingController, focusNode, onFieldSubmitted) {
                 return TextField(
                   controller: textEditingController,
                   focusNode: focusNode,
@@ -403,43 +554,18 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
                   decoration: InputDecoration(
                     hintText: hint,
                     hintStyle: TextStyle(color: Colors.grey.shade400),
-                    prefixIcon: Icon(icon, color: Colors.grey.shade400),
-                    suffixIcon: showGpsIcon
-                        ? IconButton(
-                            icon: const Icon(
-                              Icons.my_location,
-                              color: Color(0xFF1B5E20),
+                    prefixIcon:
+                        _isResolvingLocation &&
+                            textEditingController == controller
+                        ? const Padding(
+                            padding: EdgeInsets.all(12),
+                            child: SizedBox(
+                              width: 10,
+                              height: 10,
+                              child: CircularProgressIndicator(strokeWidth: 2),
                             ),
-                            onPressed: () async {
-                              final hasPermission =
-                                  await _checkLocationPermission();
-                              if (hasPermission) {
-                                try {
-                                  // ignore: unused_local_variable
-                                  final position =
-                                      await Geolocator.getCurrentPosition(
-                                        locationSettings:
-                                            const LocationSettings(
-                                              accuracy: LocationAccuracy.high,
-                                            ),
-                                      );
-                                  // TODO: Reverse geocoding
-                                  controller.text = "Current Location";
-                                } catch (e) {
-                                  if (context.mounted) {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      SnackBar(
-                                        content: Text(
-                                          'Error getting location: $e',
-                                        ),
-                                      ),
-                                    );
-                                  }
-                                }
-                              }
-                            },
                           )
-                        : null,
+                        : Icon(icon, color: Colors.grey.shade400),
                     border: InputBorder.none,
                     contentPadding: const EdgeInsets.symmetric(
                       horizontal: 16,
@@ -497,13 +623,13 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
           margin: const EdgeInsets.only(bottom: 12),
           height: 80,
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: Theme.of(context).colorScheme.surfaceContainer,
             borderRadius: BorderRadius.circular(12),
           ),
           child: Center(
             child: CircularProgressIndicator(
               strokeWidth: 1,
-              color: Colors.grey.shade200,
+              color: Theme.of(context).colorScheme.outlineVariant,
             ),
           ),
         ),
@@ -568,9 +694,11 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
       child: Container(
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: Theme.of(context).colorScheme.surfaceContainer,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.grey.shade100),
+          border: Border.all(
+            color: Theme.of(context).colorScheme.outlineVariant,
+          ),
         ),
         child: Row(
           children: [
@@ -578,12 +706,17 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
               width: 40,
               height: 40,
               decoration: BoxDecoration(
-                color: Colors.grey.shade50,
+                color: Theme.of(context).colorScheme.surface,
                 shape: BoxShape.circle,
+                border: Border.all(
+                  color: Theme.of(
+                    context,
+                  ).colorScheme.outline.withValues(alpha: 0.1),
+                ),
               ),
-              child: const Icon(
+              child: Icon(
                 Icons.directions_bus,
-                color: Color(0xFF1B5E20),
+                color: Theme.of(context).colorScheme.primary,
                 size: 20,
               ),
             ),

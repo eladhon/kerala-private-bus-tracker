@@ -6,6 +6,7 @@ import '../models/route_model.dart';
 import '../models/vehicle_state_model.dart';
 import '../models/stop_model.dart';
 import '../models/bus_trip_model.dart';
+import '../models/user_preference_model.dart';
 import 'supabase_service.dart';
 
 /// All Supabase database queries centralized in one file
@@ -100,6 +101,25 @@ class SupabaseQueries {
         .maybeSingle();
 
     return response?['role'] as String?;
+  }
+
+  /// Get user preferences
+  Future<UserPreferenceModel?> getUserPreferences(String userId) async {
+    final response = await _client
+        .from('user_preferences')
+        .select()
+        .eq('user_id', userId)
+        .maybeSingle();
+
+    if (response != null) {
+      return UserPreferenceModel.fromJson(response);
+    }
+    return null;
+  }
+
+  /// Upsert user preferences
+  Future<void> upsertUserPreferences(UserPreferenceModel preferences) async {
+    await _client.from('user_preferences').upsert(preferences.toJson());
   }
 
   // ============================================

@@ -8,6 +8,8 @@ import 'screens/auth/login_screen.dart';
 import 'screens/web_app_selector.dart';
 import 'app_theme.dart';
 
+import 'services/theme_manager.dart';
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await dotenv.load(fileName: ".env");
@@ -45,15 +47,20 @@ class KeralaBusTrackerApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Kerala Bus Tracker',
-      debugShowCheckedModeBanner: false,
-      theme: AppTheme.lightTheme,
-      darkTheme: AppTheme.darkTheme,
-      themeMode: ThemeMode.light,
-      // On web: show app selector (admin or mobile)
-      // On mobile: go directly to login
-      home: kIsWeb ? const WebAppSelector() : const LoginScreen(),
+    return AnimatedBuilder(
+      animation: ThemeManager.instance,
+      builder: (context, child) {
+        return MaterialApp(
+          title: 'Kerala Bus Tracker',
+          debugShowCheckedModeBanner: false,
+          theme: AppTheme.lightTheme,
+          darkTheme: AppTheme.darkTheme,
+          themeMode: ThemeManager.instance.themeMode,
+          // On web: show app selector (admin or mobile)
+          // On mobile: go directly to login
+          home: kIsWeb ? const WebAppSelector() : const LoginScreen(),
+        );
+      },
     );
   }
 }

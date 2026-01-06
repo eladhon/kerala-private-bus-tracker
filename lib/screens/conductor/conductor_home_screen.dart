@@ -213,6 +213,9 @@ class _ConductorHomeScreenState extends State<ConductorHomeScreen> {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
+    final colorScheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+
     return Scaffold(
       body: Stack(
         children: [
@@ -236,21 +239,21 @@ class _ConductorHomeScreenState extends State<ConductorHomeScreen> {
               // Current location marker layer
               CurrentLocationLayer(
                 style: LocationMarkerStyle(
-                  marker: const DefaultLocationMarker(
-                    color: Color(0xFF1B5E20),
+                  marker: DefaultLocationMarker(
+                    color: colorScheme.primary,
                     child: Icon(
                       Icons.directions_bus,
-                      color: Colors.white,
+                      color: colorScheme.onPrimary,
                       size: 20,
                     ),
                   ),
                   markerSize: const Size(40, 40),
-                  accuracyCircleColor: const Color(
-                    0xFF1B5E20,
-                  ).withValues(alpha: 0.1),
-                  headingSectorColor: const Color(
-                    0xFF1B5E20,
-                  ).withValues(alpha: 0.8),
+                  accuracyCircleColor: colorScheme.primary.withValues(
+                    alpha: 0.1,
+                  ),
+                  headingSectorColor: colorScheme.primary.withValues(
+                    alpha: 0.8,
+                  ),
                   headingSectorRadius: 60,
                 ),
               ),
@@ -282,7 +285,10 @@ class _ConductorHomeScreenState extends State<ConductorHomeScreen> {
                 gradient: LinearGradient(
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
-                  colors: [const Color(0xFF1B5E20), Colors.transparent],
+                  colors: [
+                    colorScheme.primaryContainer.withValues(alpha: 0.9),
+                    Colors.transparent,
+                  ],
                 ),
               ),
               child: SafeArea(
@@ -293,12 +299,12 @@ class _ConductorHomeScreenState extends State<ConductorHomeScreen> {
                       Container(
                         padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(
-                          color: Colors.white,
+                          color: colorScheme.surface,
                           borderRadius: BorderRadius.circular(12),
                         ),
-                        child: const Icon(
+                        child: Icon(
                           Icons.directions_bus,
-                          color: Color(0xFF1B5E20),
+                          color: colorScheme.primary,
                         ),
                       ),
                       const SizedBox(width: 12),
@@ -308,18 +314,17 @@ class _ConductorHomeScreenState extends State<ConductorHomeScreen> {
                           children: [
                             Text(
                               _assignedBus?.name ?? 'No Bus Assigned',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 18,
+                              style: textTheme.titleLarge?.copyWith(
+                                color: colorScheme.onPrimaryContainer,
                                 fontWeight: FontWeight.bold,
                               ),
                             ),
                             if (_assignedBus != null)
                               Text(
                                 _assignedBus!.registrationNumber,
-                                style: TextStyle(
-                                  color: Colors.white.withValues(alpha: 0.9),
-                                  fontSize: 14,
+                                style: textTheme.bodyMedium?.copyWith(
+                                  color: colorScheme.onPrimaryContainer
+                                      .withValues(alpha: 0.8),
                                 ),
                               ),
                           ],
@@ -328,9 +333,10 @@ class _ConductorHomeScreenState extends State<ConductorHomeScreen> {
                       IconButton(
                         onPressed: _logout,
                         icon: const Icon(Icons.logout),
-                        color: Colors.white,
+                        color: colorScheme.onPrimaryContainer,
                         style: IconButton.styleFrom(
-                          backgroundColor: Colors.white24,
+                          backgroundColor: colorScheme.onPrimaryContainer
+                              .withValues(alpha: 0.1),
                         ),
                       ),
                     ],
@@ -347,7 +353,7 @@ class _ConductorHomeScreenState extends State<ConductorHomeScreen> {
             right: 0,
             child: Container(
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: colorScheme.surface,
                 borderRadius: const BorderRadius.vertical(
                   top: Radius.circular(24),
                 ),
@@ -369,7 +375,7 @@ class _ConductorHomeScreenState extends State<ConductorHomeScreen> {
                       width: 40,
                       height: 4,
                       decoration: BoxDecoration(
-                        color: Colors.grey.shade300,
+                        color: colorScheme.outlineVariant,
                         borderRadius: BorderRadius.circular(2),
                       ),
                     ),
@@ -382,13 +388,15 @@ class _ConductorHomeScreenState extends State<ConductorHomeScreen> {
                           padding: const EdgeInsets.all(12),
                           decoration: BoxDecoration(
                             color: _isTracking
-                                ? Colors.green.withValues(alpha: 0.1)
-                                : Colors.grey.withValues(alpha: 0.1),
+                                ? colorScheme.primaryContainer
+                                : colorScheme.surfaceContainerHighest,
                             borderRadius: BorderRadius.circular(12),
                           ),
                           child: Icon(
                             _isTracking ? Icons.gps_fixed : Icons.gps_off,
-                            color: _isTracking ? Colors.green : Colors.grey,
+                            color: _isTracking
+                                ? colorScheme.primary
+                                : colorScheme.onSurfaceVariant,
                           ),
                         ),
                         const SizedBox(width: 12),
@@ -398,18 +406,16 @@ class _ConductorHomeScreenState extends State<ConductorHomeScreen> {
                             children: [
                               Text(
                                 _isTracking ? 'GPS Active' : 'GPS Inactive',
-                                style: const TextStyle(
+                                style: textTheme.titleMedium?.copyWith(
                                   fontWeight: FontWeight.bold,
-                                  fontSize: 16,
                                 ),
                               ),
                               Text(
                                 _isTracking
-                                    ? 'Uploading raw GPS every $_serverUploadIntervalSeconds s (server smoothed)'
+                                    ? 'Uploading raw GPS'
                                     : 'Start tracking to share location',
-                                style: TextStyle(
-                                  color: Colors.grey.shade600,
-                                  fontSize: 13,
+                                style: textTheme.bodySmall?.copyWith(
+                                  color: colorScheme.outline,
                                 ),
                               ),
                             ],
@@ -424,7 +430,6 @@ class _ConductorHomeScreenState extends State<ConductorHomeScreen> {
                               _stopTracking();
                             }
                           },
-                          activeThumbColor: const Color(0xFF1B5E20),
                         ),
                       ],
                     ),
@@ -435,7 +440,7 @@ class _ConductorHomeScreenState extends State<ConductorHomeScreen> {
                       Container(
                         padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
-                          color: Colors.grey.shade100,
+                          color: colorScheme.surfaceContainerLow,
                           borderRadius: BorderRadius.circular(12),
                         ),
                         child: Row(
@@ -444,24 +449,27 @@ class _ConductorHomeScreenState extends State<ConductorHomeScreen> {
                             _buildInfoItem(
                               Icons.location_on,
                               'Lat: ${_currentPosition!.latitude.toStringAsFixed(4)}',
+                              context,
                             ),
                             Container(
                               width: 1,
                               height: 30,
-                              color: Colors.grey.shade300,
+                              color: colorScheme.outlineVariant,
                             ),
                             _buildInfoItem(
                               Icons.location_on,
                               'Lng: ${_currentPosition!.longitude.toStringAsFixed(4)}',
+                              context,
                             ),
                             Container(
                               width: 1,
                               height: 30,
-                              color: Colors.grey.shade300,
+                              color: colorScheme.outlineVariant,
                             ),
                             _buildInfoItem(
                               Icons.speed,
                               '${(_currentPosition!.speed * 3.6).toStringAsFixed(1)} km/h',
+                              context,
                             ),
                           ],
                         ),
@@ -472,7 +480,7 @@ class _ConductorHomeScreenState extends State<ConductorHomeScreen> {
                     if (_assignedBus != null)
                       SizedBox(
                         width: double.infinity,
-                        child: ElevatedButton.icon(
+                        child: FilledButton.icon(
                           onPressed: _toggleAvailability,
                           icon: Icon(
                             _assignedBus!.isAvailable
@@ -483,16 +491,11 @@ class _ConductorHomeScreenState extends State<ConductorHomeScreen> {
                             _assignedBus!.isAvailable
                                 ? 'Bus Available ✓'
                                 : 'Mark as Available',
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                            ),
                           ),
-                          style: ElevatedButton.styleFrom(
+                          style: FilledButton.styleFrom(
                             backgroundColor: _assignedBus!.isAvailable
-                                ? Colors.green
-                                : Colors.orange,
-                            foregroundColor: Colors.white,
+                                ? colorScheme.primary
+                                : colorScheme.error,
                             padding: const EdgeInsets.symmetric(vertical: 16),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(12),
@@ -514,29 +517,34 @@ class _ConductorHomeScreenState extends State<ConductorHomeScreen> {
   Widget _buildBusMarker() {
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFF1B5E20),
+        color: Theme.of(context).colorScheme.primary,
         shape: BoxShape.circle,
-        border: Border.all(color: Colors.white, width: 3),
+        border: Border.all(
+          color: Theme.of(context).colorScheme.onPrimary,
+          width: 3,
+        ),
         boxShadow: [
           BoxShadow(color: Colors.black.withValues(alpha: 0.3), blurRadius: 8),
         ],
       ),
-      child: const Icon(Icons.directions_bus, color: Colors.white, size: 30),
+      child: Icon(
+        Icons.directions_bus,
+        color: Theme.of(context).colorScheme.onPrimary,
+        size: 30,
+      ),
     );
   }
 
-  Widget _buildInfoItem(IconData icon, String text) {
+  Widget _buildInfoItem(IconData icon, String text, BuildContext context) {
     return Column(
       children: [
-        Icon(icon, size: 16, color: Colors.grey.shade600),
+        Icon(icon, size: 16, color: Theme.of(context).colorScheme.secondary),
         const SizedBox(height: 4),
         Text(
           text,
-          style: TextStyle(
-            fontSize: 12,
-            color: Colors.grey.shade800,
-            fontFamily: 'monospace',
-          ),
+          style: Theme.of(
+            context,
+          ).textTheme.labelSmall?.copyWith(fontFamily: 'monospace'),
         ),
       ],
     );

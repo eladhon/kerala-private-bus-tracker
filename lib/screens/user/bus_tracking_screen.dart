@@ -14,8 +14,15 @@ import '../../services/routing_service.dart';
 /// Live bus tracking screen with real-time map updates
 class BusTrackingScreen extends StatefulWidget {
   final BusModel bus;
+  final String? userSourceStop;
+  final String? userDestStop;
 
-  const BusTrackingScreen({super.key, required this.bus});
+  const BusTrackingScreen({
+    super.key,
+    required this.bus,
+    this.userSourceStop,
+    this.userDestStop,
+  });
 
   @override
   State<BusTrackingScreen> createState() => _BusTrackingScreenState();
@@ -45,7 +52,8 @@ class _BusTrackingScreenState extends State<BusTrackingScreen>
   static const int _refreshIntervalSeconds = 10;
 
   // Route Polyline & Markers
-  List<LatLng> _routePoints = [];
+  List<LatLng> _routePoints = []; // Grayscale full route
+  List<LatLng> _userRoutePoints = []; // Blue user segment
   List<Marker> _stopMarkers = [];
   final _routingService = RoutingService();
 
@@ -84,18 +92,58 @@ class _BusTrackingScreenState extends State<BusTrackingScreen>
           });
         }
 
-        // Fetch polyline
-        final points = await _routingService.getRoutePolyline(route.busStops);
         if (mounted) {
           setState(() {
-            _routePoints = points;
+            _stopMarkers = markers;
+          });
+        }
+
+        // 1. Fetch Full Route Polyline (Gray)
+        final fullPoints = await _routingService.getRoutePolyline(
+          route.busStops,
+        );
+
+        // 2. Fetch User Segment Polyline (Blue) if applicable
+        List<LatLng> userPoints = [];
+        if (widget.userSourceStop != null && widget.userDestStop != null) {
+          final stops = route.busStops;
+          final startIdx = stops.indexWhere(
+            (s) => s.name == widget.userSourceStop,
+          );
+          final endIdx = stops.indexWhere((s) => s.name == widget.userDestStop);
+
+          if (startIdx != -1 && endIdx != -1 && startIdx < endIdx) {
+            final userSegmentStops = stops.sublist(startIdx, endIdx + 1);
+            userPoints = await _routingService.getRoutePolyline(
+              userSegmentStops,
+            );
+          }
+        }
+
+        if (mounted) {
+          setState(() {
+            _routePoints = fullPoints;
+            // If no user segment, usually we might want to show the full route as blue (user tracking whole route)
+            // But per requirement "original route (gray) and user selected (blue)".
+            // If user didn't select stops, maybe show full route as blue?
+            // "The user wants to visually differentiate between the original route polylines (gray) and the user's selected search route polylines (blue)"
+            // implies if search is done, show both.
+            // If no search, I'll default _userRoutePoints to fullPoints so it looks normal (Blue).
+            if (widget.userSourceStop == null || widget.userDestStop == null) {
+              _userRoutePoints = fullPoints;
+              _routePoints =
+                  []; // Don't show gray underneath if it's the exact same
+            } else {
+              _userRoutePoints = userPoints;
+            }
           });
 
-          // Animate camera to fit route
-          if (points.isNotEmpty) {
-            _fitRouteToBounds(points);
+          // Animate camera to fit user segment if available, else full route
+          if (_userRoutePoints.isNotEmpty) {
+            _fitRouteToBounds(_userRoutePoints);
+          } else if (_routePoints.isNotEmpty) {
+            _fitRouteToBounds(_routePoints);
           } else if (route.busStops.isNotEmpty) {
-            // Fallback to fitting stops if no polyline
             final stopPoints = route.busStops
                 .map((s) => LatLng(s.lat, s.lng))
                 .toList();
@@ -313,14 +361,25 @@ class _BusTrackingScreenState extends State<BusTrackingScreen>
                 urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                 userAgentPackageName: 'com.keralab.bustracker',
               ),
-              // Route Polyline Layer
+              // Route Polyline Layer (Background - Gray)
               if (_routePoints.isNotEmpty)
                 PolylineLayer(
                   polylines: [
                     Polyline(
                       points: _routePoints,
                       strokeWidth: 4.0,
-                      color: Colors.blue.withValues(alpha: 0.7),
+                      color: Colors.grey.withValues(alpha: 0.5), // Lighter gray
+                    ),
+                  ],
+                ),
+              // User Segment Polyline Layer (Foreground - Blue)
+              if (_userRoutePoints.isNotEmpty)
+                PolylineLayer(
+                  polylines: [
+                    Polyline(
+                      points: _userRoutePoints,
+                      strokeWidth: 5.0, // Slightly thicker
+                      color: Colors.blue.withValues(alpha: 0.9),
                     ),
                   ],
                 ),
@@ -437,7 +496,7 @@ class _BusTrackingScreenState extends State<BusTrackingScreen>
             right: 0,
             child: Container(
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: Theme.of(context).colorScheme.surface,
                 borderRadius: const BorderRadius.vertical(
                   top: Radius.circular(24),
                 ),
@@ -459,7 +518,7 @@ class _BusTrackingScreenState extends State<BusTrackingScreen>
                       width: 40,
                       height: 4,
                       decoration: BoxDecoration(
-                        color: Colors.grey.shade300,
+                        color: Theme.of(context).colorScheme.outlineVariant,
                         borderRadius: BorderRadius.circular(2),
                       ),
                     ),
@@ -477,7 +536,7 @@ class _BusTrackingScreenState extends State<BusTrackingScreen>
                               : 'Not Available',
                           color: widget.bus.isAvailable
                               ? Colors.green
-                              : Colors.red,
+                              : Theme.of(context).colorScheme.error,
                         ),
                         const SizedBox(width: 12),
                         if (_interpolatedLocation != null)
@@ -494,7 +553,9 @@ class _BusTrackingScreenState extends State<BusTrackingScreen>
                             vertical: 4,
                           ),
                           decoration: BoxDecoration(
-                            color: Colors.grey.shade100,
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.surfaceContainerHigh,
                             borderRadius: BorderRadius.circular(12),
                           ),
                           child: Row(
@@ -502,14 +563,18 @@ class _BusTrackingScreenState extends State<BusTrackingScreen>
                               Icon(
                                 Icons.refresh,
                                 size: 14,
-                                color: Colors.grey.shade600,
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurfaceVariant,
                               ),
                               const SizedBox(width: 4),
                               Text(
                                 '${_refreshIntervalSeconds}s',
                                 style: TextStyle(
                                   fontSize: 12,
-                                  color: Colors.grey.shade600,
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onSurfaceVariant,
                                 ),
                               ),
                             ],
@@ -533,12 +598,16 @@ class _BusTrackingScreenState extends State<BusTrackingScreen>
                             Icon(
                               Icons.location_off,
                               size: 48,
-                              color: Colors.grey.shade400,
+                              color: Theme.of(context).colorScheme.outline,
                             ),
                             const SizedBox(height: 8),
                             Text(
                               'Location not available',
-                              style: TextStyle(color: Colors.grey.shade600),
+                              style: TextStyle(
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurfaceVariant,
+                              ),
                             ),
                           ],
                         ),
@@ -548,31 +617,37 @@ class _BusTrackingScreenState extends State<BusTrackingScreen>
                         children: [
                           Row(
                             children: [
-                              const Icon(
+                              Icon(
                                 Icons.access_time,
                                 size: 18,
-                                color: Colors.grey,
+                                color: Theme.of(context).colorScheme.outline,
                               ),
                               const SizedBox(width: 8),
                               Text(
                                 'Last updated: ${_interpolatedLocation!.lastUpdatedDisplay} (Live)',
-                                style: TextStyle(color: Colors.grey.shade600),
+                                style: TextStyle(
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onSurfaceVariant,
+                                ),
                               ),
                             ],
                           ),
                           const SizedBox(height: 8),
                           Row(
                             children: [
-                              const Icon(
+                              Icon(
                                 Icons.location_on,
                                 size: 18,
-                                color: Colors.grey,
+                                color: Theme.of(context).colorScheme.outline,
                               ),
                               const SizedBox(width: 8),
                               Text(
                                 '${_interpolatedLocation!.lat.toStringAsFixed(4)}, ${_interpolatedLocation!.lng.toStringAsFixed(4)}',
                                 style: TextStyle(
-                                  color: Colors.grey.shade600,
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onSurfaceVariant,
                                   fontFamily: 'monospace',
                                 ),
                               ),

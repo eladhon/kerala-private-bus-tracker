@@ -95,18 +95,22 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Scaffold(
       body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              Color(0xFF1B5E20), // Kerala green
-              Color(0xFF2E7D32),
-              Color(0xFF388E3C),
-            ],
-          ),
+        decoration: BoxDecoration(
+          gradient: isDark
+              ? null
+              : const LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    Color(0xFF1B5E20), // Kerala green
+                    Color(0xFF2E7D32),
+                    Color(0xFF388E3C),
+                  ],
+                ),
+          color: isDark ? Theme.of(context).colorScheme.surface : null,
         ),
         child: SafeArea(
           child: Center(
@@ -119,24 +123,30 @@ class _LoginScreenState extends State<LoginScreen> {
                   Container(
                     padding: const EdgeInsets.all(20),
                     decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.2),
+                      color: isDark
+                          ? Theme.of(context).colorScheme.primaryContainer
+                          : Colors.white.withValues(alpha: 0.2),
                       shape: BoxShape.circle,
                     ),
-                    child: const Icon(
+                    child: Icon(
                       Icons.directions_bus,
                       size: 80,
-                      color: Colors.white,
+                      color: isDark
+                          ? Theme.of(context).colorScheme.onPrimaryContainer
+                          : Colors.white,
                     ),
                   ),
                   const SizedBox(height: 24),
 
                   // App Title
-                  const Text(
+                  Text(
                     'Kerala Bus Tracker',
                     style: TextStyle(
                       fontSize: 28,
                       fontWeight: FontWeight.bold,
-                      color: Colors.white,
+                      color: isDark
+                          ? Theme.of(context).colorScheme.onSurface
+                          : Colors.white,
                     ),
                   ),
                   const SizedBox(height: 8),
@@ -144,7 +154,9 @@ class _LoginScreenState extends State<LoginScreen> {
                     'Track private buses in real-time',
                     style: TextStyle(
                       fontSize: 16,
-                      color: Colors.white.withValues(alpha: 0.9),
+                      color: isDark
+                          ? Theme.of(context).colorScheme.onSurfaceVariant
+                          : Colors.white.withValues(alpha: 0.9),
                     ),
                   ),
                   const SizedBox(height: 48),
@@ -152,9 +164,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   // Login Card
                   Card(
                     elevation: 8,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
-                    ),
+                    // Card color handled by Theme (CardTheme)
                     child: Padding(
                       padding: const EdgeInsets.all(24),
                       child: Form(
@@ -162,12 +172,12 @@ class _LoginScreenState extends State<LoginScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            const Text(
+                            Text(
                               'Login with Mobile',
                               style: TextStyle(
                                 fontSize: 20,
                                 fontWeight: FontWeight.bold,
-                                color: Color(0xFF1B5E20),
+                                color: Theme.of(context).colorScheme.primary,
                               ),
                               textAlign: TextAlign.center,
                             ),
@@ -182,16 +192,12 @@ class _LoginScreenState extends State<LoginScreen> {
                                 LengthLimitingTextInputFormatter(10),
                               ],
                               validator: _validatePhone,
-                              decoration: InputDecoration(
+                              decoration: const InputDecoration(
                                 labelText: 'Mobile Number',
                                 hintText: '9876543210',
                                 prefixText: '+91 ',
-                                prefixIcon: const Icon(Icons.phone_android),
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                filled: true,
-                                fillColor: Colors.grey.shade50,
+                                prefixIcon: Icon(Icons.phone_android),
+                                // Borders handled by Theme (InputDecorationTheme)
                               ),
                             ),
                             const SizedBox(height: 24),
@@ -199,24 +205,16 @@ class _LoginScreenState extends State<LoginScreen> {
                             // Login Button
                             ElevatedButton(
                               onPressed: _isLoading ? null : _sendOtp,
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFF1B5E20),
-                                foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 16,
-                                ),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                elevation: 2,
-                              ),
+                              // Style handled by Theme
                               child: _isLoading
-                                  ? const SizedBox(
+                                  ? SizedBox(
                                       height: 20,
                                       width: 20,
                                       child: CircularProgressIndicator(
                                         strokeWidth: 2,
-                                        color: Colors.white,
+                                        color: Theme.of(
+                                          context,
+                                        ).colorScheme.onPrimary,
                                       ),
                                     )
                                   : const Text(
@@ -239,7 +237,9 @@ class _LoginScreenState extends State<LoginScreen> {
                     'By continuing, you agree to our Terms of Service',
                     style: TextStyle(
                       fontSize: 12,
-                      color: Colors.white.withValues(alpha: 0.8),
+                      color: isDark
+                          ? Theme.of(context).colorScheme.onSurfaceVariant
+                          : Colors.white.withValues(alpha: 0.8),
                     ),
                     textAlign: TextAlign.center,
                   ),

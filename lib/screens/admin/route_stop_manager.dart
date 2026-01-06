@@ -315,23 +315,27 @@ class _RouteStopManagerScreenState extends State<RouteStopManagerScreen> {
         _isSaving = false;
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('All changes saved successfully!'),
-          backgroundColor: Colors.green,
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('All changes saved successfully!'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
 
       // Reload to get fresh IDs for temp items
       _loadStops();
     } catch (e) {
       setState(() => _isSaving = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error saving changes: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error saving changes: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -413,7 +417,7 @@ class _RouteStopManagerScreenState extends State<RouteStopManagerScreen> {
                                 : _stops
                                       .map((e) => LatLng(e.lat, e.lng))
                                       .toList(),
-                            color: Colors.blue.withOpacity(0.7),
+                            color: Colors.blue.withValues(alpha: 0.7),
                             strokeWidth: 4,
                           ),
                         ],
@@ -529,7 +533,7 @@ class _RouteStopManagerScreenState extends State<RouteStopManagerScreen> {
                       horizontal: 12,
                     ),
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.95),
+                      color: Colors.white.withValues(alpha: 0.95),
                       borderRadius: BorderRadius.circular(8),
                       boxShadow: const [
                         BoxShadow(blurRadius: 4, color: Colors.black26),
@@ -655,7 +659,9 @@ class _RouteStopManagerScreenState extends State<RouteStopManagerScreen> {
                               return ListTile(
                                 key: ValueKey(stop.id),
                                 selected: isSelected,
-                                selectedTileColor: Colors.blue.withOpacity(0.1),
+                                selectedTileColor: Colors.blue.withValues(
+                                  alpha: 0.1,
+                                ),
                                 leading: CircleAvatar(
                                   radius: 14,
                                   backgroundColor: isSelected

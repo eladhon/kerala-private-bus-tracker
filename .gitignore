@@ -46,3 +46,8 @@ app.*.map.json
 
 # Environment variables
 .env
+
+# Desktop platforms (not in use)
+macos/
+windows/
+linux/

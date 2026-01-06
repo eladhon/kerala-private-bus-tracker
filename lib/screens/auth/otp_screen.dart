@@ -110,14 +110,22 @@ class _OtpScreenState extends State<OtpScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Scaffold(
       body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [Color(0xFF1B5E20), Color(0xFF2E7D32), Color(0xFF388E3C)],
-          ),
+        decoration: BoxDecoration(
+          gradient: isDark
+              ? null
+              : const LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    Color(0xFF1B5E20),
+                    Color(0xFF2E7D32),
+                    Color(0xFF388E3C),
+                  ],
+                ),
+          color: isDark ? Theme.of(context).colorScheme.surface : null,
         ),
         child: SafeArea(
           child: Center(
@@ -131,7 +139,12 @@ class _OtpScreenState extends State<OtpScreen> {
                     alignment: Alignment.centerLeft,
                     child: IconButton(
                       onPressed: () => Navigator.pop(context),
-                      icon: const Icon(Icons.arrow_back, color: Colors.white),
+                      icon: Icon(
+                        Icons.arrow_back,
+                        color: isDark
+                            ? Theme.of(context).colorScheme.onSurface
+                            : Colors.white,
+                      ),
                     ),
                   ),
                   const SizedBox(height: 20),
@@ -140,20 +153,30 @@ class _OtpScreenState extends State<OtpScreen> {
                   Container(
                     padding: const EdgeInsets.all(20),
                     decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.2),
+                      color: isDark
+                          ? Theme.of(context).colorScheme.primaryContainer
+                          : Colors.white.withValues(alpha: 0.2),
                       shape: BoxShape.circle,
                     ),
-                    child: const Icon(Icons.sms, size: 60, color: Colors.white),
+                    child: Icon(
+                      Icons.sms,
+                      size: 60,
+                      color: isDark
+                          ? Theme.of(context).colorScheme.onPrimaryContainer
+                          : Colors.white,
+                    ),
                   ),
                   const SizedBox(height: 24),
 
                   // Title
-                  const Text(
+                  Text(
                     'Verify OTP',
                     style: TextStyle(
                       fontSize: 28,
                       fontWeight: FontWeight.bold,
-                      color: Colors.white,
+                      color: isDark
+                          ? Theme.of(context).colorScheme.onSurface
+                          : Colors.white,
                     ),
                   ),
                   const SizedBox(height: 8),
@@ -161,7 +184,9 @@ class _OtpScreenState extends State<OtpScreen> {
                     'Enter the 6-digit code sent to\n${widget.phoneNumber}',
                     style: TextStyle(
                       fontSize: 16,
-                      color: Colors.white.withValues(alpha: 0.9),
+                      color: isDark
+                          ? Theme.of(context).colorScheme.onSurfaceVariant
+                          : Colors.white.withValues(alpha: 0.9),
                     ),
                     textAlign: TextAlign.center,
                   ),
@@ -170,9 +195,7 @@ class _OtpScreenState extends State<OtpScreen> {
                   // OTP Input Card
                   Card(
                     elevation: 8,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20),
-                    ),
+                    // Theme handles Card color
                     child: Padding(
                       padding: const EdgeInsets.all(24),
                       child: Column(
@@ -190,6 +213,7 @@ class _OtpScreenState extends State<OtpScreen> {
                                   focusNode: _focusNodes[index],
                                   keyboardType: TextInputType.number,
                                   textAlign: TextAlign.center,
+                                  textAlignVertical: TextAlignVertical.center,
                                   maxLength: 1,
                                   inputFormatters: [
                                     FilteringTextInputFormatter.digitsOnly,
@@ -198,15 +222,26 @@ class _OtpScreenState extends State<OtpScreen> {
                                       _onOtpDigitChanged(index, value),
                                   decoration: InputDecoration(
                                     counterText: '',
+                                    // Use theme defaults mostly, but ensure minimal padding for center
+                                    contentPadding:
+                                        EdgeInsets.zero, // Keep zero for align
+                                    // Override borderColor for active fields if needed
                                     border: OutlineInputBorder(
                                       borderRadius: BorderRadius.circular(10),
                                     ),
                                     filled: true,
-                                    fillColor: Colors.grey.shade50,
+                                    fillColor: isDark
+                                        ? Theme.of(
+                                            context,
+                                          ).colorScheme.surfaceContainerHighest
+                                        : Colors.grey.shade50,
                                   ),
-                                  style: const TextStyle(
+                                  style: TextStyle(
                                     fontSize: 20,
                                     fontWeight: FontWeight.bold,
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.onSurface,
                                   ),
                                 ),
                               ),
@@ -219,23 +254,16 @@ class _OtpScreenState extends State<OtpScreen> {
                             width: double.infinity,
                             child: ElevatedButton(
                               onPressed: _isLoading ? null : _verifyOtp,
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFF1B5E20),
-                                foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 16,
-                                ),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                              ),
+                              // Theme handles button style
                               child: _isLoading
-                                  ? const SizedBox(
+                                  ? SizedBox(
                                       height: 20,
                                       width: 20,
                                       child: CircularProgressIndicator(
                                         strokeWidth: 2,
-                                        color: Colors.white,
+                                        color: Theme.of(
+                                          context,
+                                        ).colorScheme.onPrimary,
                                       ),
                                     )
                                   : const Text(
@@ -253,18 +281,19 @@ class _OtpScreenState extends State<OtpScreen> {
                           TextButton(
                             onPressed: () {
                               ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('OTP resent successfully'),
-                                  backgroundColor: Color(0xFF1B5E20),
+                                SnackBar(
+                                  content: const Text(
+                                    'OTP resent successfully',
+                                  ),
+                                  backgroundColor: Theme.of(
+                                    context,
+                                  ).primaryColor,
                                 ),
                               );
                             },
                             child: const Text(
                               "Didn't receive the code? Resend",
-                              style: TextStyle(
-                                color: Color(0xFF1B5E20),
-                                fontWeight: FontWeight.w500,
-                              ),
+                              style: TextStyle(fontWeight: FontWeight.w500),
                             ),
                           ),
                         ],
@@ -277,14 +306,20 @@ class _OtpScreenState extends State<OtpScreen> {
                   Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.1),
+                      color: isDark
+                          ? Theme.of(
+                              context,
+                            ).colorScheme.surfaceContainerHighest
+                          : Colors.white.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: Text(
                       '💡 Demo Mode: Enter any 6-digit code to continue',
                       style: TextStyle(
                         fontSize: 14,
-                        color: Colors.white.withValues(alpha: 0.9),
+                        color: isDark
+                            ? Theme.of(context).colorScheme.onSurfaceVariant
+                            : Colors.white.withValues(alpha: 0.9),
                       ),
                       textAlign: TextAlign.center,
                     ),
