@@ -1,18 +1,26 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:geocoding/geocoding.dart';
 
 import '../../services/supabase_queries.dart';
 import '../../models/bus_model.dart';
 import '../../models/stop_model.dart';
 import '../../models/route_model.dart';
+import '../../shared/services/location_service.dart';
 import 'bus_tracking_screen.dart';
 
 /// Route search screen with source/destination inputs and bus results
 class RouteSearchScreen extends StatefulWidget {
   final String initialQuery;
+  final String? currentUserId; // Manual user ID passing
 
-  const RouteSearchScreen({super.key, required this.initialQuery});
+  const RouteSearchScreen({
+    super.key,
+    required this.initialQuery,
+    this.currentUserId,
+  });
 
   @override
   State<RouteSearchScreen> createState() => _RouteSearchScreenState();
@@ -23,11 +31,16 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
   final _sourceController = TextEditingController();
   final _destController = TextEditingController();
 
-  List<StopModel> _allStops = [];
-  List<BusModel> _foundBuses = [];
-  bool _isSearching = false;
+  final _allStops = <StopModel>[];
+  final _routesMap = <String, RouteModel>{};
+
+  // Refactored to store search results explicitly
+  List<BusSearchResult> _searchResults = [];
   bool _hasSearched = false;
+  bool _isSearching = false;
   bool _isResolvingLocation = false;
+  LatLng? _sourceLatLng;
+  LatLng? _destLatLng;
 
   @override
   void initState() {
@@ -75,9 +88,18 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
       }
 
       setState(() {
-        _allStops = uniqueStops.values.toList()
-          ..sort((a, b) => a.name.compareTo(b.name));
+        _routesMap.clear();
+        _routesMap.addAll({for (var r in routes) r.id: r});
+        _allStops.clear();
+        _allStops.addAll(
+          uniqueStops.values.toList()..sort((a, b) => a.name.compareTo(b.name)),
+        );
       });
+
+      // After stops are loaded, check if initial query needs resolution
+      if (widget.initialQuery.isNotEmpty) {
+        _resolveInitialQuery();
+      }
     } catch (e) {
       debugPrint('Error loading stops: $e');
       if (mounted) {
@@ -88,35 +110,56 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
     }
   }
 
+  Future<void> _resolveInitialQuery() async {
+    final query = widget.initialQuery;
+    // Check if it's already a valid stop
+    final isStop = _allStops.any(
+      (s) => s.name.toLowerCase() == query.toLowerCase(),
+    );
+
+    if (!isStop) {
+      // It's a landmark/address, try to resolve it
+      debugPrint('Resolving initial query landmark: $query');
+      await _resolveLocationToNearestStop(query, _destController);
+    }
+  }
+
   Future<void> _findBuses() async {
+    // 0. Auto-resolve raw inputs if they are not known stops
+    if (_sourceController.text.isNotEmpty &&
+        !_isKnownStop(_sourceController.text)) {
+      final success = await _resolveLocationToNearestStop(
+        _sourceController.text,
+        _sourceController,
+      );
+      if (!success) return; // Stop if resolution failed
+    }
+
+    if (_destController.text.isNotEmpty &&
+        !_isKnownStop(_destController.text)) {
+      final success = await _resolveLocationToNearestStop(
+        _destController.text,
+        _destController,
+      );
+      if (!success) return; // Stop if resolution failed
+    }
+
     setState(() {
       _isSearching = true;
       _hasSearched = true;
-      _foundBuses = []; // Clear previous results
+      _searchResults = []; // Clear previous results
     });
 
     try {
-      // DEBUG: Check if we can see ANY buses at all
-      final allBusesDebug = await _queries.getAllBuses();
-      debugPrint('DEBUG: Global bus count: ${allBusesDebug.length}');
-      if (allBusesDebug.isNotEmpty) {
-        debugPrint('DEBUG: First bus route_id: ${allBusesDebug.first.routeId}');
-        debugPrint('DEBUG: First bus ID: ${allBusesDebug.first.id}');
-      } else {
-        debugPrint(
-          'DEBUG: No buses visible globally. Likely RLS or empty table.',
-        );
-      }
+      final source = _sourceController.text.trim().toLowerCase();
+      final dest = _destController.text.trim().toLowerCase();
 
-      // 1. Get all routes
+      // 1. Fetch all routes
       final routes = await _queries.getAllRoutes();
-      final source = _sourceController.text.toLowerCase().trim();
-      final dest = _destController.text.toLowerCase().trim();
 
       debugPrint('Total routes loaded: ${routes.length}');
 
-      // 2. Filter routes that match source and/or destination
-      // Ideally this should be backend logic, but doing client-side for now
+      // 2. Filter routes
       final matchingRoutes = routes.where((route) {
         final start = route.startLocation.toLowerCase();
         final end = route.endLocation.toLowerCase();
@@ -145,27 +188,67 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
         );
       }
 
-      // 3. Get buses for matching routes
-      List<BusModel> allBuses = [];
+      // 3. Get buses and generate results
+      List<BusSearchResult> results = [];
+
       for (var route in matchingRoutes) {
-        debugPrint('Checking buses for route: ${route.name} (${route.id})');
         final buses = await _queries.getBusesByRoute(route.id);
-        allBuses.addAll(buses);
+
+        for (var bus in buses) {
+          // A. Check Schedule matches
+          if (bus.schedule.isNotEmpty) {
+            for (var scheduleItem in bus.schedule) {
+              // Check if this schedule item corresponds to the requested route
+              // Or ANY matching route (e.g. return trip)
+              if (scheduleItem.routeId == route.id) {
+                results.add(
+                  BusSearchResult(
+                    bus: bus,
+                    departureTime: scheduleItem.departureTime,
+                    routeId: route.id,
+                  ),
+                );
+              }
+            }
+          }
+
+          // B. Legacy/Primary Route Check
+          // Only if this route is the primary route AND no schedule for it was found?
+          // Or just treat primary as another entry if it matches?
+          if (bus.routeId == route.id) {
+            // Avoid duplicating if we covered it in schedule (if needed)
+            // For now, assume if schedule exists, it supersedes primary route
+            // UNLESS primary route is not in schedule.
+            // Simplification: Just add it if no schedule matches found for this route
+            // (Assuming migration to schedule-only eventually)
+            bool alreadyAdded = results.any(
+              (r) =>
+                  r.bus.id == bus.id &&
+                  r.routeId == route.id &&
+                  r.departureTime == (bus.departureTime ?? 'Scheduled'),
+            );
+
+            if (!alreadyAdded) {
+              results.add(
+                BusSearchResult(
+                  bus: bus,
+                  departureTime: bus.departureTime ?? 'Scheduled',
+                  routeId: route.id,
+                ),
+              );
+            }
+          }
+        }
       }
 
-      debugPrint('Found buses: ${allBuses.length}');
-      if (mounted && matchingRoutes.isNotEmpty && allBuses.isEmpty) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Found ${matchingRoutes.length} routes, but no buses assigned to them.',
-            ),
-          ),
-        );
-      }
+      // Sort results by time?
+      results.sort((a, b) {
+        // Simple string comparison for HH:MM works for today
+        return a.departureTime.compareTo(b.departureTime);
+      });
 
       setState(() {
-        _foundBuses = allBuses;
+        _searchResults = results;
       });
     } catch (e) {
       debugPrint('Error finding buses: $e');
@@ -184,24 +267,128 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
       final temp = _sourceController.text;
       _sourceController.text = _destController.text;
       _destController.text = temp;
+
+      final tempLatLng = _sourceLatLng;
+      _sourceLatLng = _destLatLng;
+      _destLatLng = tempLatLng;
     });
   }
 
-  void _onBusTap(BusModel bus) {
+  void _onBusTap(BusModel bus, String routeId) {
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => BusTrackingScreen(
           bus: bus,
-          userSourceStop: _sourceController.text.isNotEmpty
-              ? _sourceController.text
+          currentUserId: widget.currentUserId,
+          selectedRouteId: routeId,
+          userSourceStop: _sourceController.text.trim().isNotEmpty
+              ? _sourceController.text.trim()
               : null,
-          userDestStop: _destController.text.isNotEmpty
-              ? _destController.text
+          userDestStop: _destController.text.trim().isNotEmpty
+              ? _destController.text.trim()
               : null,
+          userSourceLatLng: _sourceLatLng,
+          userDestLatLng: _destLatLng,
         ),
       ),
     );
+  }
+
+  bool _isKnownStop(String query) {
+    if (_allStops.isEmpty) return false;
+    final lower = query.toLowerCase().trim();
+    return _allStops.any((s) => s.name.toLowerCase() == lower);
+  }
+
+  Future<bool> _resolveLocationToNearestStop(
+    String query,
+    TextEditingController controller,
+  ) async {
+    setState(() => _isResolvingLocation = true);
+    try {
+      // Use Nominatim OpenStreetMap API (Same as Admin Panel)
+      // This is more reliable for local landmarks in Kerala than the native geocoding package
+      debugPrint("Geocoding address via Nominatim: $query");
+
+      LatLng? foundLocation;
+
+      try {
+        final url = Uri.parse(
+          'https://nominatim.openstreetmap.org/search?q=$query&format=json&limit=1',
+        );
+        final response = await http.get(
+          url,
+          headers: {'User-Agent': 'KeralaBusTrackerUser/1.0 (internal)'},
+        );
+
+        if (response.statusCode == 200) {
+          final List data = json.decode(response.body);
+          if (data.isNotEmpty) {
+            final firstResult = data[0];
+            final double lat = double.parse(firstResult['lat']);
+            final double lng = double.parse(firstResult['lon']);
+            foundLocation = LatLng(lat, lng);
+            debugPrint("Nominatim found: $lat, $lng");
+          }
+        }
+      } catch (e) {
+        debugPrint("Nominatim error: $e");
+      }
+
+      if (foundLocation != null) {
+        if (controller == _sourceController) {
+          _sourceLatLng = foundLocation;
+        } else {
+          _destLatLng = foundLocation;
+        }
+
+        // Find nearest stop to this location
+        final stops = await _queries.getNearestBusStops(
+          foundLocation.latitude,
+          foundLocation.longitude,
+          limit: 1,
+        );
+        if (stops.isNotEmpty) {
+          if (mounted) controller.text = stops.first.name;
+          // Don't show snackbar here during auto-resolve to avoid spam,
+          // OR show it to confirm what happened.
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  "Resolved '$query' to nearest stop: ${stops.first.name}",
+                ),
+                duration: const Duration(seconds: 2),
+              ),
+            );
+          }
+          return true;
+        } else if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text("No bus stops found near '$query'")),
+          );
+          return false;
+        }
+      } else if (mounted) {
+        // Fallback/Error message
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Could not find location '$query'")),
+        );
+        return false;
+      }
+      return false;
+    } catch (e) {
+      if (mounted) {
+        debugPrint("Resolution failed for '$query': $e");
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Location resolution failed")),
+        );
+      }
+      return false;
+    } finally {
+      if (mounted) setState(() => _isResolvingLocation = false);
+    }
   }
 
   Future<void> _handleLocationSelection(
@@ -220,6 +407,14 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
             accuracy: LocationAccuracy.medium,
           ),
         );
+
+        final foundLocation = LatLng(position.latitude, position.longitude);
+        if (controller == _sourceController) {
+          _sourceLatLng = foundLocation;
+        } else {
+          _destLatLng = foundLocation;
+        }
+
         // Find nearest stop
         final stops = await _queries.getNearestBusStops(
           position.latitude,
@@ -251,39 +446,7 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
       final query = selection
           .replaceFirst('Search for: ', '')
           .replaceAll("'", "");
-      setState(() => _isResolvingLocation = true);
-      try {
-        // Geocoding
-        final locations = await locationFromAddress(query);
-        if (locations.isNotEmpty) {
-          final loc = locations.first;
-          // Find nearest stop to this location
-          final stops = await _queries.getNearestBusStops(
-            loc.latitude,
-            loc.longitude,
-            limit: 1,
-          );
-          if (stops.isNotEmpty && mounted) {
-            controller.text = stops.first.name;
-          } else if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text("No bus stops found near '$query'")),
-            );
-          }
-        } else if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text("Could not find location '$query'")),
-          );
-        }
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text("Geocoding failed: $e")));
-        }
-      } finally {
-        if (mounted) setState(() => _isResolvingLocation = false);
-      }
+      await _resolveLocationToNearestStop(query, controller);
       return;
     }
 
@@ -292,8 +455,8 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
   }
 
   Future<bool> _checkLocationPermission() async {
-    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) {
+    final status = await LocationService().requestPermission();
+    if (status == LocationPermissionStatus.serviceDisabled) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Location services are disabled.')),
@@ -301,21 +464,15 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
       }
       return false;
     }
-
-    LocationPermission permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-      if (permission == LocationPermission.denied) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Location permissions are denied')),
-          );
-        }
-        return false;
+    if (status == LocationPermissionStatus.denied) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Location permissions are denied')),
+        );
       }
+      return false;
     }
-
-    if (permission == LocationPermission.deniedForever) {
+    if (status == LocationPermissionStatus.deniedForever) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -327,7 +484,6 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
       }
       return false;
     }
-
     return true;
   }
 
@@ -392,6 +548,7 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
                   height: 1,
                   color: Theme.of(context).colorScheme.outlineVariant,
                   indent: 48,
+                  endIndent: 0,
                 ),
                 _buildAutocompleteField(
                   controller: _destController,
@@ -404,27 +561,33 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
           ),
           Positioned(
             right: 24,
-            child: InkWell(
-              onTap: _swapLocations,
-              child: Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.surfaceContainerHigh,
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: Theme.of(context).colorScheme.outlineVariant,
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.05),
-                      blurRadius: 4,
+            child: Material(
+              color: Colors.transparent,
+              borderRadius: BorderRadius.circular(20),
+              clipBehavior: Clip.antiAlias,
+              child: InkWell(
+                onTap: _swapLocations,
+                borderRadius: BorderRadius.circular(20),
+                child: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.surfaceContainerHigh,
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: Theme.of(context).colorScheme.outlineVariant,
                     ),
-                  ],
-                ),
-                child: Icon(
-                  Icons.swap_vert,
-                  color: Theme.of(context).colorScheme.primary,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.white.withValues(alpha: 0.2),
+                        blurRadius: 4,
+                      ),
+                    ],
+                  ),
+                  child: Icon(
+                    Icons.swap_vert,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
                 ),
               ),
             ),
@@ -636,7 +799,7 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
       );
     }
 
-    if (_hasSearched && _foundBuses.isEmpty) {
+    if (_hasSearched && _searchResults.isEmpty) {
       return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -667,127 +830,198 @@ class _RouteSearchScreenState extends State<RouteSearchScreen> {
 
     return ListView.separated(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      itemCount: _foundBuses.length,
+      itemCount: _searchResults.length,
       separatorBuilder: (context, index) => const SizedBox(height: 8),
       itemBuilder: (context, index) {
-        final bus = _foundBuses[index];
-        return _buildBusListItem(bus);
+        final result = _searchResults[index];
+        return _buildBusResultItem(result);
       },
     );
   }
 
-  Widget _buildBusListItem(BusModel bus) {
+  Widget _buildBusResultItem(BusSearchResult result) {
+    final bus = result.bus;
     // Determine bus type/badge (Randomly for demo if not in model, or check data)
     final isKSRTC = bus.name.toUpperCase().contains('KSRTC');
     final badgeColor = isKSRTC ? Colors.orange.shade100 : Colors.blue.shade100;
     final badgeTextColor = isKSRTC
-        ? Colors.orange.shade800
-        : Colors.blue.shade800;
+        ? Colors.orange.shade900
+        : Colors.blue.shade900;
     final badgeText = isKSRTC ? 'KSRTC' : 'Private';
 
-    // Status (Mock logic)
-    final status = 'Arriving'; // In real app, calculate from live data
-    final time = '10:30 AM'; // Schedule time
+    // Status logic
+    final isOnline = bus.isAvailable; // Use real status field
+    final status = isOnline ? 'Live Now' : 'Scheduled';
 
-    return InkWell(
-      onTap: () => _onBusTap(bus),
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surfaceContainer,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: Theme.of(context).colorScheme.outlineVariant,
-          ),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surface,
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: Theme.of(
-                    context,
-                  ).colorScheme.outline.withValues(alpha: 0.1),
-                ),
-              ),
-              child: Icon(
-                Icons.directions_bus,
-                color: Theme.of(context).colorScheme.primary,
-                size: 20,
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Text(
-                        bus.name,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 15,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 6,
-                          vertical: 2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: badgeColor,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Text(
-                          badgeText,
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                            color: badgeTextColor,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Row(
-                    children: [
-                      Text(
-                        status,
-                        style: const TextStyle(
-                          color: Colors.green,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
+    // Calculate dynamic time based on specific schedule/route
+    String time = 'Check Times';
+    final route = _routesMap[result.routeId];
+
+    if (route != null) {
+      final sourceName = _sourceController.text.trim();
+      if (sourceName.isNotEmpty) {
+        try {
+          final stop = route.busStops.firstWhere(
+            (s) => s.name.toLowerCase() == sourceName.toLowerCase(),
+          );
+
+          try {
+            final parts = result.departureTime.split(':');
+            if (parts.length == 2) {
+              final baseTime = TimeOfDay(
+                hour: int.parse(parts[0]),
+                minute: int.parse(parts[1]),
+              );
+              final minutesFromStart = stop.minutesFromStart ?? 0;
+              final totalMinutes =
+                  (baseTime.hour * 60) + baseTime.minute + minutesFromStart;
+
+              final arrivalHour = (totalMinutes ~/ 60) % 24;
+              final arrivalMinute = totalMinutes % 60;
+              final arrivalTime = TimeOfDay(
+                hour: arrivalHour,
+                minute: arrivalMinute,
+              );
+
+              time = arrivalTime.format(context);
+            } else {
+              time = result.departureTime;
+            }
+          } catch (e) {
+            time = result.departureTime;
+          }
+        } catch (_) {
+          time = result.departureTime;
+        }
+      } else {
+        time = result.departureTime;
+      }
+    } else {
+      time = result.departureTime;
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainer,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => _onBusTap(bus, result.routeId),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Row(
               children: [
-                Text(
-                  time,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 13,
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.primary.withValues(alpha: 0.1),
+                    shape: BoxShape.circle,
                   ),
+                  child: Icon(
+                    Icons.directions_bus,
+                    color: Theme.of(context).colorScheme.primary,
+                    size: 20,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Text(
+                            bus.name,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 15,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: badgeColor,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              badgeText,
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                                color: badgeTextColor,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Row(
+                        children: [
+                          Text(
+                            status,
+                            style: const TextStyle(
+                              color: Colors.green,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      time,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                      ),
+                    ),
+                    Text(
+                      'Departs: ${result.departureTime}',
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: Colors.grey.shade600,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(width: 8),
+                Icon(
+                  Icons.chevron_right,
+                  color: Colors.grey.shade400,
+                  size: 20,
                 ),
               ],
             ),
-            const SizedBox(width: 8),
-            Icon(Icons.chevron_right, color: Colors.grey.shade400, size: 20),
-          ],
+          ),
         ),
       ),
     );
   }
+}
+
+class BusSearchResult {
+  final BusModel bus;
+  final String departureTime;
+  final String routeId;
+
+  BusSearchResult({
+    required this.bus,
+    required this.departureTime,
+    required this.routeId,
+  });
 }

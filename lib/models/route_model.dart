@@ -27,10 +27,13 @@ class RouteModel {
     var loadedStops = <StopModel>[];
 
     // Handle stops from JSONB column (denormalized)
-    if (json['stops'] != null) {
-      final stopsJson = json['stops'];
-      if (stopsJson is List) {
-        loadedStops = stopsJson
+    // Handle stops from JSONB column (denormalized)
+    // Check both potential keys for robustness
+    final stopsData = json['stops'] ?? json['bus_stops'];
+
+    if (stopsData != null) {
+      if (stopsData is List) {
+        loadedStops = stopsData
             .map((e) => StopModel.fromJson(e as Map<String, dynamic>))
             .toList();
       }

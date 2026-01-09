@@ -1,4 +1,8 @@
 /// Bus model representing a private bus
+library;
+
+import 'bus_schedule_model.dart';
+
 class BusModel {
   final String id;
   final String name;
@@ -6,6 +10,9 @@ class BusModel {
   final String routeId;
   final String? conductorId;
   final bool isAvailable;
+  final String? unavailabilityReason;
+  final String? departureTime; // Format: "HH:mm" (Legacy, kept for backup)
+  final List<BusScheduleModel> schedule;
   final DateTime? createdAt;
 
   BusModel({
@@ -15,6 +22,9 @@ class BusModel {
     required this.routeId,
     this.conductorId,
     this.isAvailable = false,
+    this.unavailabilityReason,
+    this.departureTime,
+    this.schedule = const [],
     this.createdAt,
   });
 
@@ -27,6 +37,13 @@ class BusModel {
       routeId: json['route_id'] as String? ?? '',
       conductorId: json['conductor_id'] as String?,
       isAvailable: json['is_available'] as bool? ?? false,
+      unavailabilityReason: json['unavailability_reason'] as String?,
+      departureTime: json['departure_time'] as String?,
+      schedule:
+          (json['schedule'] as List<dynamic>?)
+              ?.map((e) => BusScheduleModel.fromJson(e as Map<String, dynamic>))
+              .toList() ??
+          [],
       createdAt: json['created_at'] != null
           ? DateTime.parse(json['created_at'] as String)
           : null,
@@ -42,6 +59,9 @@ class BusModel {
       'route_id': routeId,
       'conductor_id': conductorId,
       'is_available': isAvailable,
+      'unavailability_reason': unavailabilityReason,
+      'departure_time': departureTime,
+      'schedule': schedule.map((e) => e.toJson()).toList(),
     };
   }
 
@@ -53,6 +73,9 @@ class BusModel {
     String? routeId,
     String? conductorId,
     bool? isAvailable,
+    String? unavailabilityReason,
+    String? departureTime,
+    List<BusScheduleModel>? schedule,
     DateTime? createdAt,
   }) {
     return BusModel(
@@ -62,6 +85,9 @@ class BusModel {
       routeId: routeId ?? this.routeId,
       conductorId: conductorId ?? this.conductorId,
       isAvailable: isAvailable ?? this.isAvailable,
+      unavailabilityReason: unavailabilityReason ?? this.unavailabilityReason,
+      departureTime: departureTime ?? this.departureTime,
+      schedule: schedule ?? this.schedule,
       createdAt: createdAt ?? this.createdAt,
     );
   }

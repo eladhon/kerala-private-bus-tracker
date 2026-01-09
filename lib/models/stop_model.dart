@@ -8,6 +8,7 @@ class StopModel {
 
   // orderIndex is context-dependent (used when part of a route)
   final int? orderIndex;
+  final int? minutesFromStart; // Dynamic offset from route start
 
   StopModel({
     required this.id,
@@ -16,6 +17,7 @@ class StopModel {
     required this.lng,
     this.createdAt,
     this.orderIndex,
+    this.minutesFromStart,
   });
 
   /// Create StopModel from JSON (Supabase response)
@@ -30,17 +32,14 @@ class StopModel {
           ? DateTime.parse(json['created_at'] as String)
           : null,
       orderIndex: json['order_index'] as int?,
+      minutesFromStart: json['minutes_from_start'] as int?,
     );
   }
 
   /// Create StopModel from joined route_stops query
-  /// Structure: { "stop_order": 1, "stops": { "id": "...", "name": "...", ... } }
   factory StopModel.fromRouteStopJson(Map<String, dynamic> json) {
     final stopData = json['stops'] as Map<String, dynamic>? ?? {};
     final order = json['stop_order'] as int?;
-
-    // We expect the 'stops' object to have the details, but lat/lng might be missing if not selected properly
-    // We rely on the query selecting stops(id, name, lat, lng)
 
     return StopModel(
       id: stopData['id'] as String? ?? '',
@@ -51,6 +50,7 @@ class StopModel {
           ? DateTime.parse(stopData['created_at'] as String)
           : null,
       orderIndex: order,
+      minutesFromStart: stopData['minutes_from_start'] as int?,
     );
   }
 
@@ -62,6 +62,7 @@ class StopModel {
       'lat': lat,
       'lng': lng,
       'order_index': orderIndex,
+      'minutes_from_start': minutesFromStart,
     };
   }
 
@@ -73,6 +74,7 @@ class StopModel {
     double? lng,
     DateTime? createdAt,
     int? orderIndex,
+    int? minutesFromStart,
   }) {
     return StopModel(
       id: id ?? this.id,
@@ -81,6 +83,7 @@ class StopModel {
       lng: lng ?? this.lng,
       createdAt: createdAt ?? this.createdAt,
       orderIndex: orderIndex ?? this.orderIndex,
+      minutesFromStart: minutesFromStart ?? this.minutesFromStart,
     );
   }
 }

@@ -4,12 +4,20 @@ import 'package:flutter/services.dart';
 import '../../services/supabase_queries.dart';
 import '../../models/bus_model.dart';
 import '../../models/user_model.dart';
+import '../../models/bus_schedule_model.dart';
+import 'widgets/bus_schedule_editor.dart';
 import '../../models/route_model.dart';
 import '../../models/stop_model.dart';
 
 import 'admin_login_screen.dart';
 import 'widgets/route_stop_manager_widget.dart';
 import '../../services/theme_manager.dart';
+import 'screens/moderation_screen.dart';
+import 'screens/approvals_screen.dart';
+import 'screens/admin_reports_screen.dart';
+import 'screens/admin_analytics_screen.dart';
+import 'screens/shift_management_screen.dart';
+import '../../widgets/sos_button.dart';
 
 /// Admin home screen with dashboard and management tabs
 
@@ -108,70 +116,71 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
   Future<void> _showAddBusDialog() async {
     final nameController = TextEditingController();
     final regController = TextEditingController();
-    String? selectedRouteId = _routes.isNotEmpty ? _routes.first.id : null;
+    List<BusScheduleModel> tempSchedule = [];
 
+    // Use StatefulBuilder to manage local state inside the dialog
     final result = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Add New Bus'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameController,
-                decoration: const InputDecoration(
-                  labelText: 'Bus Name',
-                  border: OutlineInputBorder(),
-                ),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) {
+          return AlertDialog(
+            title: const Text('Add New Bus'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: nameController,
+                    decoration: const InputDecoration(
+                      labelText: 'Bus Name',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: regController,
+                    decoration: const InputDecoration(
+                      labelText: 'Registration Number',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  BusScheduleEditor(
+                    routes: _routes,
+                    initialSchedule: tempSchedule,
+                    onScheduleChanged: (newSchedule) {
+                      tempSchedule = newSchedule;
+                    },
+                  ),
+                ],
               ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: regController,
-                decoration: const InputDecoration(
-                  labelText: 'Registration Number',
-                  border: OutlineInputBorder(),
-                ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
               ),
-              const SizedBox(height: 16),
-              DropdownButtonFormField<String>(
-                initialValue: selectedRouteId,
-                decoration: const InputDecoration(
-                  labelText: 'Route',
-                  border: OutlineInputBorder(),
-                ),
-                items: _routes
-                    .map(
-                      (r) => DropdownMenuItem(value: r.id, child: Text(r.name)),
-                    )
-                    .toList(),
-                onChanged: (v) => selectedRouteId = v,
+              ElevatedButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Add'),
               ),
             ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Add'),
-          ),
-        ],
+          );
+        },
       ),
     );
 
     if (result == true &&
         nameController.text.isNotEmpty &&
         regController.text.isNotEmpty &&
-        selectedRouteId != null) {
+        tempSchedule.isNotEmpty) {
       try {
         await _queries.createBus(
           name: nameController.text,
           registrationNumber: regController.text,
-          routeId: selectedRouteId!,
+          routeId:
+              tempSchedule.first.routeId, // Use first trip's route as primary
+          schedule: tempSchedule,
         );
         await _loadData();
         _showSuccess('Bus added successfully');
@@ -184,60 +193,56 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
   Future<void> _showEditBusDialog(BusModel bus) async {
     final nameController = TextEditingController(text: bus.name);
     final regController = TextEditingController(text: bus.registrationNumber);
-    String? selectedRouteId = bus.routeId;
+    List<BusScheduleModel> tempSchedule = List.from(bus.schedule);
 
     final result = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Edit Bus'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameController,
-                decoration: const InputDecoration(
-                  labelText: 'Bus Name',
-                  border: OutlineInputBorder(),
-                ),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) {
+          return AlertDialog(
+            title: const Text('Edit Bus'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: nameController,
+                    decoration: const InputDecoration(
+                      labelText: 'Bus Name',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: regController,
+                    decoration: const InputDecoration(
+                      labelText: 'Registration Number',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  BusScheduleEditor(
+                    routes: _routes,
+                    initialSchedule: tempSchedule,
+                    onScheduleChanged: (newSchedule) {
+                      tempSchedule = newSchedule;
+                    },
+                  ),
+                ],
               ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: regController,
-                decoration: const InputDecoration(
-                  labelText: 'Registration Number',
-                  border: OutlineInputBorder(),
-                ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
               ),
-              const SizedBox(height: 16),
-              DropdownButtonFormField<String>(
-                initialValue: _routes.any((r) => r.id == selectedRouteId)
-                    ? selectedRouteId
-                    : null,
-                decoration: const InputDecoration(
-                  labelText: 'Route',
-                  border: OutlineInputBorder(),
-                ),
-                items: _routes
-                    .map(
-                      (r) => DropdownMenuItem(value: r.id, child: Text(r.name)),
-                    )
-                    .toList(),
-                onChanged: (v) => selectedRouteId = v,
+              ElevatedButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Save'),
               ),
             ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Save'),
-          ),
-        ],
+          );
+        },
       ),
     );
 
@@ -246,7 +251,8 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
         await _queries.updateBus(bus.id, {
           'name': nameController.text,
           'registration_number': regController.text,
-          'route_id': selectedRouteId,
+          'schedule': tempSchedule,
+          if (tempSchedule.isNotEmpty) 'route_id': tempSchedule.first.routeId,
         });
         await _loadData();
         _showSuccess('Bus updated');
@@ -696,6 +702,8 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
         return 'Add Conductor';
       case 2:
         return 'Add Route';
+      case 3:
+        return 'Add Word'; // Logic handled inside ModerationScreen mostly, but for consistency
       default:
         return 'Add';
     }
@@ -712,6 +720,86 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
       case 2:
         _showAddRouteDialog();
         break;
+    }
+  }
+
+  Future<void> _createReturnRoute(RouteModel route) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Create Return Route'),
+        content: Text(
+          'Create a return route for "${route.name}"?\n\n'
+          'This will duplicate stops in reverse order and swap Start/End locations.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Create'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      if (route.busStops.isEmpty) {
+        _showError('Cannot reverse a route with no stops.');
+        return;
+      }
+
+      try {
+        // 1. Swap Start/End
+        final newName = '${route.endLocation} - ${route.startLocation}';
+
+        // 2. Reverse Stops
+        // Logic:
+        // Total Duration = LastStop.minutesFromStart of original route
+        // New Stop[i] is Old Stop[N-1-i]
+        // New Minutes = Total Minutes - Old Stop[N-1-i].minutesFromStart
+
+        final totalMinutes = route.busStops.last.minutesFromStart ?? 0;
+
+        final reversedStops = route.busStops.reversed
+            .toList()
+            .asMap()
+            .entries
+            .map((entry) {
+              final index = entry.key;
+              final stop = entry.value;
+
+              int? newMinutes;
+              if (stop.minutesFromStart != null) {
+                newMinutes = totalMinutes - stop.minutesFromStart!;
+                if (newMinutes < 0) newMinutes = 0;
+              }
+
+              // Create new Stop copy with new ID (temp) and reversed logic
+              return stop.copyWith(
+                id: 'temp_rev_$index',
+                minutesFromStart: newMinutes,
+                orderIndex: index + 1,
+              );
+            })
+            .toList();
+
+        await _queries.createRoute(
+          name: newName,
+          startLocation: route.endLocation,
+          endLocation: route.startLocation,
+          distance: route.distance,
+          isPopular: route.isPopular,
+          stops: reversedStops,
+        );
+
+        await _loadData();
+        _showSuccess('Return route created: "$newName"');
+      } catch (e) {
+        _showError('Failed to create return route: $e');
+      }
     }
   }
 
@@ -776,14 +864,45 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                       label: Text('Buses'),
                     ),
                     NavigationRailDestination(
-                      icon: Icon(Icons.badge_outlined),
-                      selectedIcon: Icon(Icons.badge),
+                      icon: Icon(Icons.people),
+                      selectedIcon: Icon(Icons.people_alt),
                       label: Text('Conductors'),
                     ),
                     NavigationRailDestination(
-                      icon: Icon(Icons.map_outlined),
-                      selectedIcon: Icon(Icons.map),
+                      icon: Icon(Icons.map),
+                      selectedIcon: Icon(Icons.map_outlined),
                       label: Text('Routes'),
+                    ),
+                    // New Moderation Tab
+                    NavigationRailDestination(
+                      icon: Icon(Icons.shield),
+                      selectedIcon: Icon(Icons.shield),
+                      label: Text('Moderation'),
+                    ),
+                    NavigationRailDestination(
+                      icon: Icon(Icons.verified_user_outlined),
+                      selectedIcon: Icon(Icons.verified_user),
+                      label: Text('Approvals'),
+                    ),
+                    NavigationRailDestination(
+                      icon: Icon(Icons.assignment_outlined),
+                      selectedIcon: Icon(Icons.assignment),
+                      label: Text('Reports'),
+                    ),
+                    NavigationRailDestination(
+                      icon: Icon(Icons.analytics_outlined),
+                      selectedIcon: Icon(Icons.analytics),
+                      label: Text('Analytics'),
+                    ),
+                    NavigationRailDestination(
+                      icon: Icon(Icons.schedule_outlined),
+                      selectedIcon: Icon(Icons.schedule),
+                      label: Text('Shifts'),
+                    ),
+                    NavigationRailDestination(
+                      icon: Icon(Icons.sos_outlined),
+                      selectedIcon: Icon(Icons.sos),
+                      label: Text('SOS'),
                     ),
                   ],
                 ),
@@ -846,6 +965,18 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
         return _buildConductorManagement();
       case 2:
         return _buildRouteManager();
+      case 3:
+        return const ModerationScreen();
+      case 4:
+        return const ApprovalsScreen();
+      case 5:
+        return AdminReportsScreen(conductors: _conductors, buses: _buses);
+      case 6:
+        return const AdminAnalyticsScreen();
+      case 7:
+        return const ShiftManagementScreen();
+      case 8:
+        return const SosAlertsScreen();
       default:
         return _buildBusManagement();
     }
@@ -1119,12 +1250,43 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                       items: _routes.map((route) {
                         return DropdownMenuItem(
                           value: route.id,
-                          child: Text(
-                            route.name,
-                            style: TextStyle(
-                              fontWeight: FontWeight.w500,
-                              color: Theme.of(context).colorScheme.onSurface,
-                            ),
+                          child: Row(
+                            children: [
+                              Text(
+                                route.name,
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w500,
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onSurface,
+                                ),
+                              ),
+                              if (route.isPopular) ...[
+                                const SizedBox(width: 8),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                    vertical: 2,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.orange.withValues(alpha: 0.2),
+                                    borderRadius: BorderRadius.circular(4),
+                                    border: Border.all(
+                                      color: Colors.orange.shade700,
+                                      width: 0.5,
+                                    ),
+                                  ),
+                                  child: Text(
+                                    'POPULAR',
+                                    style: TextStyle(
+                                      color: Colors.orange.shade900,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ],
                           ),
                         );
                       }).toList(),
@@ -1150,21 +1312,24 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
                 ),
               ),
               const SizedBox(width: 8),
-              if (_routes.isNotEmpty) ...[
-                IconButton(
-                  icon: const Icon(Icons.edit, color: Colors.blue),
-                  onPressed: () => _showEditRouteDialog(selectedRoute),
-                  tooltip: 'Edit Route',
+              IconButton(
+                icon: const Icon(Icons.swap_horiz, color: Colors.purple),
+                onPressed: () => _createReturnRoute(selectedRoute),
+                tooltip: 'Create Return Route',
+              ),
+              IconButton(
+                icon: const Icon(Icons.edit, color: Colors.blue),
+                onPressed: () => _showEditRouteDialog(selectedRoute),
+                tooltip: 'Edit Route',
+              ),
+              IconButton(
+                icon: Icon(
+                  Icons.delete_outline,
+                  color: Theme.of(context).colorScheme.error,
                 ),
-                IconButton(
-                  icon: Icon(
-                    Icons.delete_outline,
-                    color: Theme.of(context).colorScheme.error,
-                  ),
-                  onPressed: () => _deleteRoute(selectedRoute),
-                  tooltip: 'Delete Route',
-                ),
-              ],
+                onPressed: () => _deleteRoute(selectedRoute),
+                tooltip: 'Delete Route',
+              ),
             ],
           ),
         ),

@@ -9,6 +9,7 @@ import 'screens/web_app_selector.dart';
 import 'app_theme.dart';
 
 import 'services/theme_manager.dart';
+import 'services/notification_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -37,6 +38,14 @@ void main() async {
   } catch (e) {
     debugPrint('Tile cache initialization error: $e');
     // App will still work with online-only maps
+  }
+
+  // Initialize Notification Service
+  try {
+    await NotificationService().init();
+    debugPrint('Notification Service initialized');
+  } catch (e) {
+    debugPrint('Notification Service initialization error: $e');
   }
 
   runApp(const KeralaBusTrackerApp());

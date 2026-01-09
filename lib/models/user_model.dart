@@ -5,6 +5,7 @@ class UserModel {
   final String name;
   final String role; // 'user' or 'conductor'
   final String? busId; // Only for conductors
+  final bool isStudent; // New field
   final DateTime? createdAt;
 
   UserModel({
@@ -13,6 +14,7 @@ class UserModel {
     required this.name,
     required this.role,
     this.busId,
+    this.isStudent = false,
     this.createdAt,
   });
 
@@ -24,6 +26,7 @@ class UserModel {
       name: json['name'] as String? ?? 'Unknown User',
       role: json['role'] as String? ?? 'user',
       busId: json['bus_id'] as String?,
+      isStudent: json['is_student'] as bool? ?? false,
       createdAt: json['created_at'] != null
           ? DateTime.parse(json['created_at'] as String)
           : null,
@@ -38,6 +41,7 @@ class UserModel {
       'name': name,
       'role': role,
       'bus_id': busId,
+      'is_student': isStudent,
     };
   }
 
@@ -54,6 +58,7 @@ class UserModel {
     String? name,
     String? role,
     String? busId,
+    bool? isStudent,
     DateTime? createdAt,
   }) {
     return UserModel(
@@ -62,6 +67,7 @@ class UserModel {
       name: name ?? this.name,
       role: role ?? this.role,
       busId: busId ?? this.busId,
+      isStudent: isStudent ?? this.isStudent,
       createdAt: createdAt ?? this.createdAt,
     );
   }

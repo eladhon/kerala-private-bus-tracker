@@ -1,741 +1,139 @@
+/// All Supabase database queries centralized - Facade Pattern
+///
+/// This file now acts as a facade that delegates to domain-specific query modules.
+/// For backwards compatibility, all existing method signatures are preserved.
+/// New code should prefer using the domain modules directly.
+library;
+
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:flutter/foundation.dart';
 import '../models/user_model.dart';
 import '../models/bus_model.dart';
+import '../models/bus_schedule_model.dart';
 import '../models/route_model.dart';
 import '../models/vehicle_state_model.dart';
 import '../models/stop_model.dart';
 import '../models/bus_trip_model.dart';
 import '../models/user_preference_model.dart';
+import '../models/conductor_review_model.dart';
+import '../models/user_trip_history_model.dart';
+import '../models/student_application_model.dart';
+import '../models/conductor_report_model.dart';
 import 'supabase_service.dart';
+import 'queries/auth_queries.dart';
+import 'queries/bus_queries.dart';
+import 'queries/route_queries.dart';
+import 'queries/user_queries.dart';
+import 'queries/vehicle_queries.dart';
+import 'queries/admin_queries.dart';
 
-/// All Supabase database queries centralized in one file
+/// Facade for all Supabase queries
+///
+/// This class provides backward compatibility while delegating to
+/// domain-specific query modules internally.
 class SupabaseQueries {
   final SupabaseClient _client = SupabaseService().client;
+  SupabaseClient get client => _client;
+
+  // Domain-specific query modules
+  final AuthQueries auth = AuthQueries();
+  final BusQueries buses = BusQueries();
+  final RouteQueries routes = RouteQueries();
+  final UserQueries users = UserQueries();
+  final VehicleQueries vehicles = VehicleQueries();
+  final AdminQueries admin = AdminQueries();
 
   // ============================================
-  // AUTH QUERIES
+  // AUTH QUERIES (delegated to auth module)
   // ============================================
 
-  /// Sign in with phone number - sends OTP
-  Future<void> signInWithPhone(String phoneNumber) async {
-    await _client.auth.signInWithOtp(phone: phoneNumber);
-  }
+  Future<void> signInWithPhone(String phoneNumber) =>
+      auth.signInWithPhone(phoneNumber);
 
-  /// Verify OTP code
-  Future<AuthResponse> verifyOtp(String phoneNumber, String otpCode) async {
-    return await _client.auth.verifyOTP(
-      phone: phoneNumber,
-      token: otpCode,
-      type: OtpType.sms,
-    );
-  }
+  Future<AuthResponse> verifyOtp(String phoneNumber, String otpCode) =>
+      auth.verifyOtp(phoneNumber, otpCode);
 
-  /// Sign out current user
-  Future<void> signOut() async {
-    await _client.auth.signOut();
-  }
+  Future<void> signOut() => auth.signOut();
 
   // ============================================
-  // USER QUERIES
+  // USER QUERIES (delegated to users module)
   // ============================================
 
-  /// Get user by phone number
-  Future<UserModel?> getUserByPhone(String phoneNumber) async {
-    debugPrint('Querying user by phone: $phoneNumber');
-    final response = await _client
-        .from('users')
-        .select()
-        .eq('phone', phoneNumber)
-        .maybeSingle();
+  Future<UserModel?> getUserByPhone(String phoneNumber) =>
+      users.getUserByPhone(phoneNumber);
 
-    debugPrint('User query response: $response');
+  Future<UserModel?> getUserById(String userId) => users.getUserById(userId);
 
-    if (response != null) {
-      return UserModel.fromJson(response);
-    }
-    return null;
-  }
-
-  /// Get user by ID
-  Future<UserModel?> getUserById(String userId) async {
-    final response = await _client
-        .from('users')
-        .select()
-        .eq('id', userId)
-        .maybeSingle();
-
-    if (response != null) {
-      return UserModel.fromJson(response);
-    }
-    return null;
-  }
-
-  /// Create a new user
   Future<UserModel> createUser({
     required String phone,
     required String name,
     required String role,
     String? busId,
-  }) async {
-    final response = await _client
-        .from('users')
-        .insert({'phone': phone, 'name': name, 'role': role, 'bus_id': busId})
-        .select()
-        .single();
+    bool isStudent = false,
+  }) => users.createUser(
+    phone: phone,
+    name: name,
+    role: role,
+    busId: busId,
+    isStudent: isStudent,
+  );
 
-    return UserModel.fromJson(response);
-  }
+  Future<void> updateUser(String userId, Map<String, dynamic> updates) =>
+      users.updateUser(userId, updates);
 
-  /// Update user details
-  Future<void> updateUser(String userId, Map<String, dynamic> updates) async {
-    await _client.from('users').update(updates).eq('id', userId);
-  }
+  Future<void> updateUserStudentStatus(String userId, bool isStudent) =>
+      users.updateUserStudentStatus(userId, isStudent);
 
-  /// Get user role by phone number
-  Future<String?> getUserRole(String phoneNumber) async {
-    final response = await _client
-        .from('users')
-        .select('role')
-        .eq('phone', phoneNumber)
-        .maybeSingle();
+  Future<String?> getUserRole(String phoneNumber) =>
+      users.getUserRole(phoneNumber);
 
-    return response?['role'] as String?;
-  }
+  Future<UserPreferenceModel?> getUserPreferences(String userId) =>
+      users.getUserPreferences(userId);
 
-  /// Get user preferences
-  Future<UserPreferenceModel?> getUserPreferences(String userId) async {
-    final response = await _client
-        .from('user_preferences')
-        .select()
-        .eq('user_id', userId)
-        .maybeSingle();
-
-    if (response != null) {
-      return UserPreferenceModel.fromJson(response);
-    }
-    return null;
-  }
-
-  /// Upsert user preferences
-  Future<void> upsertUserPreferences(UserPreferenceModel preferences) async {
-    await _client.from('user_preferences').upsert(preferences.toJson());
-  }
+  Future<void> upsertUserPreferences(UserPreferenceModel preferences) =>
+      users.upsertUserPreferences(preferences);
 
   // ============================================
-  // BUS QUERIES
+  // FAVORITES QUERIES (delegated to users module)
   // ============================================
 
-  /// Get all buses
-  Future<List<BusModel>> getAllBuses() async {
-    final response = await _client
-        .from('buses')
-        .select()
-        .order('name', ascending: true);
+  Future<bool> toggleFavorite(String busId, String userId) =>
+      users.toggleFavorite(busId, userId);
 
-    final data = response as List<dynamic>? ?? [];
-    return data.map((bus) => BusModel.fromJson(bus)).toList();
-  }
+  Future<bool> isBusFavorite(String busId, String userId) =>
+      users.isBusFavorite(busId, userId);
 
-  /// Get buses by route ID
-  Future<List<BusModel>> getBusesByRoute(String routeId) async {
-    debugPrint('Querying buses for route ID: $routeId');
-    final response = await _client
-        .from('buses')
-        .select()
-        .eq('route_id', routeId)
-        .order('name', ascending: true);
-
-    final data = response as List<dynamic>? ?? [];
-    debugPrint('Found ${data.length} buses for route $routeId');
-    return data.map((bus) => BusModel.fromJson(bus)).toList();
-  }
-
-  /// Get available buses only
-  Future<List<BusModel>> getAvailableBuses() async {
-    final response = await _client
-        .from('buses')
-        .select()
-        .eq('is_available', true)
-        .order('name', ascending: true);
-
-    final data = response as List<dynamic>? ?? [];
-    return data.map((bus) => BusModel.fromJson(bus)).toList();
-  }
-
-  /// Get bus by ID
-  Future<BusModel?> getBusById(String busId) async {
-    final response = await _client
-        .from('buses')
-        .select()
-        .eq('id', busId)
-        .maybeSingle();
-
-    if (response != null) {
-      return BusModel.fromJson(response);
-    }
-    return null;
-  }
-
-  /// Get bus assigned to conductor
-  Future<BusModel?> getBusByConductorId(String conductorId) async {
-    final response = await _client
-        .from('buses')
-        .select()
-        .eq('conductor_id', conductorId)
-        .maybeSingle();
-
-    if (response != null) {
-      return BusModel.fromJson(response);
-    }
-    return null;
-  }
-
-  /// Update bus availability
-  Future<void> setBusAvailability(String busId, bool isAvailable) async {
-    await _client
-        .from('buses')
-        .update({'is_available': isAvailable})
-        .eq('id', busId);
-  }
-
-  /// Search buses by name or registration
-  Future<List<BusModel>> searchBuses(String query) async {
-    final response = await _client
-        .from('buses')
-        .select()
-        .or('name.ilike.%$query%,registration_number.ilike.%$query%')
-        .order('name', ascending: true);
-
-    final data = response as List<dynamic>? ?? [];
-    return data.map((bus) => BusModel.fromJson(bus)).toList();
-  }
+  Future<List<BusModel>> getFavoriteBuses(String userId) =>
+      admin.getFavoriteBuses(userId);
 
   // ============================================
-  // ROUTE QUERIES
+  // BUS QUERIES (delegated to buses module)
   // ============================================
 
-  /// Get all routes
-  /// Get all routes
-  Future<List<RouteModel>> getAllRoutes() async {
-    final response = await _client
-        .from('routes')
-        .select('*')
-        .order('name', ascending: true);
+  Future<List<BusModel>> getAllBuses() => buses.getAllBuses();
 
-    final data = response as List<dynamic>? ?? [];
-    return data.map((route) => RouteModel.fromJson(route)).toList();
-  }
+  Future<List<BusModel>> getBusesByRoute(String routeId) =>
+      buses.getBusesByRoute(routeId);
 
-  /// Get route by ID
-  Future<RouteModel?> getRouteById(String routeId) async {
-    final response = await _client
-        .from('routes')
-        .select('*')
-        .eq('id', routeId)
-        .maybeSingle();
+  Future<List<BusModel>> getAvailableBuses() => buses.getAvailableBuses();
 
-    if (response != null) {
-      return RouteModel.fromJson(response);
-    }
-    return null;
-  }
+  Future<BusModel?> getBusById(String busId) => buses.getBusById(busId);
 
-  /// Search routes by name, start or end location
-  Future<List<RouteModel>> searchRoutes(String query) async {
-    final response = await _client
-        .from('routes')
-        .select('*')
-        .or(
-          'name.ilike.%$query%,start_location.ilike.%$query%,end_location.ilike.%$query%',
-        )
-        .order('name', ascending: true);
+  Future<List<BusModel>> getBusesByIds(List<String> ids) =>
+      buses.getBusesByIds(ids);
 
-    final data = response as List<dynamic>? ?? [];
-    return data.map((route) => RouteModel.fromJson(route)).toList();
-  }
+  Future<BusModel?> getBusByConductorId(String conductorId) =>
+      buses.getBusByConductorId(conductorId);
 
-  /// Get popular routes (for quick picks)
-  Future<List<RouteModel>> getPopularRoutes({int limit = 5}) async {
-    final response = await _client
-        .from('routes')
-        .select('*')
-        .eq('is_popular', true)
-        .limit(limit)
-        .order('name', ascending: true);
+  Future<void> setBusAvailability(
+    String busId,
+    bool isAvailable, {
+    String? reason,
+  }) => buses.setBusAvailability(busId, isAvailable, reason: reason);
 
-    final data = response as List<dynamic>? ?? [];
-    return data.map((route) => RouteModel.fromJson(route)).toList();
-  }
+  Future<List<BusModel>> searchBuses(String query) => buses.searchBuses(query);
 
-  /// Create a new route
-  Future<RouteModel> createRoute({
-    required String name,
-    required String startLocation,
-    required String endLocation,
-    double? distance,
-    bool isPopular = false,
-  }) async {
-    final response = await _client
-        .from('routes')
-        .insert({
-          'name': name,
-          'start_location': startLocation,
-          'end_location': endLocation,
-          'distance': distance,
-          'is_popular': isPopular,
-        })
-        .select()
-        .single();
-
-    return RouteModel.fromJson(response);
-  }
-
-  /// Update route details
-  Future<void> updateRoute(String routeId, Map<String, dynamic> updates) async {
-    await _client.from('routes').update(updates).eq('id', routeId);
-  }
-
-  /// Delete a route and handle associated buses
-  Future<void> deleteRoute(String routeId) async {
-    // First, unassign all buses from this route
-    await _client
-        .from('buses')
-        .update({'route_id': null})
-        .eq('route_id', routeId);
-
-    // Delete the route (cascade deletes route_stops, but stops remain as they are entities)
-    await _client.from('routes').delete().eq('id', routeId);
-  }
-
-  // ============================================
-  // TRIP MANAGEMENT QUERIES
-  // ============================================
-
-  /// Start a new trip for a bus on a route
-  Future<BusTripModel> startTrip({
-    required String busId,
-    required String routeId,
-  }) async {
-    // 1. Check if there is already an active trip for this bus and end it?
-    // Optional: Auto-close previous active trips
-    await _client
-        .from('bus_trips')
-        .update({
-          'status': 'completed',
-          'end_time': DateTime.now().toUtc().toIso8601String(),
-        })
-        .eq('bus_id', busId)
-        .eq('status', 'active');
-
-    // 2. Create new active trip
-    final response = await _client
-        .from('bus_trips')
-        .insert({
-          'bus_id': busId,
-          'route_id': routeId,
-          'status': 'active',
-          'start_time': DateTime.now().toUtc().toIso8601String(),
-        })
-        .select()
-        .single();
-
-    return BusTripModel.fromJson(response);
-  }
-
-  /// End an active trip
-  Future<void> endTrip(String tripId) async {
-    await _client
-        .from('bus_trips')
-        .update({
-          'status': 'completed',
-          'end_time': DateTime.now().toUtc().toIso8601String(),
-        })
-        .eq('id', tripId);
-  }
-
-  /// Get current active trip for a bus
-  Future<BusTripModel?> getActiveTripForBus(String busId) async {
-    final response = await _client
-        .from('bus_trips')
-        .select()
-        .eq('bus_id', busId)
-        .eq('status', 'active')
-        .maybeSingle();
-
-    if (response != null) {
-      return BusTripModel.fromJson(response);
-    }
-    return null;
-  }
-
-  /// Get all trips for a bus (history)
-  Future<List<BusTripModel>> getTripHistory(String busId) async {
-    final response = await _client
-        .from('bus_trips')
-        .select()
-        .eq('bus_id', busId)
-        .order('start_time', ascending: false);
-
-    final data = response as List<dynamic>;
-    return data.map((t) => BusTripModel.fromJson(t)).toList();
-  }
-
-  // ============================================
-  // BUS STOP QUERIES (Normalized)
-  // ============================================
-
-  /// Get all bus stops (aggregated from all routes)
-  Future<List<StopModel>> getAllBusStops() async {
-    // Since stops are now inside routes, we fetch all routes and collect stops
-    final routes = await getAllRoutes();
-    final allStops = <StopModel>[];
-    final seenIds = <String>{};
-
-    for (var route in routes) {
-      for (var stop in route.busStops) {
-        if (!seenIds.contains(stop.id)) {
-          allStops.add(stop);
-          seenIds.add(stop.id);
-        }
-      }
-    }
-
-    // Sort by name
-    allStops.sort((a, b) => a.name.compareTo(b.name));
-    return allStops;
-  }
-
-  /// Add a new bus stop to a route using specialized RPCs
-  /// Add a new bus stop to a route (JSONB append)
-  Future<void> createBusStop({
-    required String name,
-    required double latitude,
-    required double longitude,
-    String? routeId,
-    int? orderIndex,
-  }) async {
-    if (routeId == null) {
-      throw Exception('Route ID is required to add a stop');
-    }
-
-    // 1. Fetch current route
-    final route = await getRouteById(routeId);
-    if (route == null) throw Exception('Route not found');
-
-    // 2. Create new Stop object
-    final newStop = StopModel(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-      name: name,
-      lat: latitude,
-      lng: longitude,
-      orderIndex: orderIndex ?? route.busStops.length + 1,
-    );
-
-    // 3. Update list
-    final updatedStops = List<StopModel>.from(route.busStops);
-    if (orderIndex != null && orderIndex <= updatedStops.length) {
-      updatedStops.insert(orderIndex, newStop);
-    } else {
-      updatedStops.add(newStop);
-    }
-
-    // 4. Save back to DB
-    await _client
-        .from('routes')
-        .update({'stops': updatedStops.map((s) => s.toJson()).toList()})
-        .eq('id', routeId);
-  }
-
-  /// Update a bus stop
-  /// Update a bus stop (JSONB update)
-  Future<void> updateBusStop(
-    String stopId,
-    Map<String, dynamic> updates,
-  ) async {
-    // We need route_id to find the stop in the correct route
-    final routeId = updates['route_id'];
-    if (routeId == null) {
-      throw Exception('route_id is required to update a stop in JSONB mode');
-    }
-
-    final route = await getRouteById(routeId);
-    if (route == null) throw Exception('Route not found');
-
-    final updatedStops = route.busStops.map((s) {
-      if (s.id == stopId) {
-        // Apply updates
-        return s.copyWith(
-          name: updates['name'] ?? s.name,
-          lat: updates['lat'] ?? updates['latitude'] ?? s.lat,
-          lng: updates['lng'] ?? updates['longitude'] ?? s.lng,
-          orderIndex: updates['order_index'] ?? s.orderIndex,
-        );
-      }
-      return s;
-    }).toList();
-
-    // Re-sort if order changed
-    if (updates.containsKey('order_index')) {
-      updatedStops.sort(
-        (a, b) => (a.orderIndex ?? 0).compareTo(b.orderIndex ?? 0),
-      );
-    }
-
-    await _client
-        .from('routes')
-        .update({'stops': updatedStops.map((s) => s.toJson()).toList()})
-        .eq('id', routeId);
-  }
-
-  /// Delete a bus stop (JSONB remove)
-  Future<void> deleteBusStop(String stopId, String? routeId) async {
-    if (routeId == null) {
-      throw Exception('Route ID is required to delete a stop');
-    }
-
-    final route = await getRouteById(routeId);
-    if (route == null) return;
-
-    final updatedStops = route.busStops.where((s) => s.id != stopId).toList();
-
-    await _client
-        .from('routes')
-        .update({'stops': updatedStops.map((s) => s.toJson()).toList()})
-        .eq('id', routeId);
-  }
-
-  /// Get nearest bus stops to a location
-  Future<List<StopModel>> getNearestBusStops(
-    double latitude,
-    double longitude, {
-    int limit = 5,
-  }) async {
-    // PostGIS nearest neighbor on 'stops' table is no longer possible directly
-    // WE must fetch all stops from routes and calculate distance in Dart
-    // Or rely on a specialized postgres function that iterates routes jsonb (expensive)
-    // For now, doing Dart-side calculation
-
-    final allStops = await getAllBusStops();
-
-    // Sort by distance (Haversine simplified)
-    allStops.sort((a, b) {
-      final distA =
-          (a.lat - latitude) * (a.lat - latitude) +
-          (a.lng - longitude) * (a.lng - longitude);
-      final distB =
-          (b.lat - latitude) * (b.lat - latitude) +
-          (b.lng - longitude) * (b.lng - longitude);
-      return distA.compareTo(distB);
-    });
-
-    return allStops.take(limit).toList();
-  }
-
-  // ============================================
-  // VEHICLE OBSERVATION / STATE QUERIES
-  // ============================================
-
-  /// Insert raw GPS observation
-  Future<void> insertVehicleObservation({
-    required String busId,
-    required double lat,
-    required double lng,
-    double? accuracyM,
-    double? speedMps,
-    double? headingDeg,
-  }) async {
-    await _client.from('vehicle_observations').insert({
-      'bus_id': busId,
-      'lat': lat,
-      'lng': lng,
-      'accuracy_m': accuracyM,
-      'speed_mps': speedMps,
-      'heading_deg': headingDeg,
-      'observed_at': DateTime.now().toUtc().toIso8601String(),
-    });
-  }
-
-  /// Get current smoothed state of a vehicle
-  Future<VehicleStateModel?> getVehicleState(String busId) async {
-    final response = await _client
-        .from('vehicle_state')
-        .select()
-        .eq('bus_id', busId)
-        .maybeSingle();
-
-    if (response != null) {
-      return VehicleStateModel.fromJson(response);
-    }
-    return null;
-  }
-
-  /// Stream real-time smoothed vehicle state updates
-  Stream<VehicleStateModel?> streamVehicleState(String busId) {
-    return _client
-        .from('vehicle_state')
-        .stream(primaryKey: ['bus_id'])
-        .eq('bus_id', busId)
-        .map((data) {
-          if (data.isNotEmpty) {
-            return VehicleStateModel.fromJson(data.first);
-          }
-          return null;
-        });
-  }
-
-  /// Stream all vehicle states
-  Stream<List<VehicleStateModel>> streamAllVehicleStates() {
-    return _client
-        .from('vehicle_state')
-        .stream(primaryKey: ['bus_id'])
-        .map(
-          (data) =>
-              data.map((state) => VehicleStateModel.fromJson(state)).toList(),
-        );
-  }
-
-  /// Get vehicle states for buses on a specific route
-  Future<List<VehicleStateModel>> getVehicleStatesOnRoute(
-    String routeId,
-  ) async {
-    final buses = await getBusesByRoute(routeId);
-    final busIds = buses.map((b) => b.id).toList();
-
-    if (busIds.isEmpty) return [];
-
-    final response = await _client
-        .from('vehicle_state')
-        .select()
-        .inFilter('bus_id', busIds);
-
-    final data = response as List<dynamic>? ?? [];
-    return data.map((state) => VehicleStateModel.fromJson(state)).toList();
-  }
-
-  // ============================================
-  // DASHBOARD / STATS QUERIES
-  // ============================================
-
-  Future<int> getAvailableBusCount() async {
-    final response = await _client
-        .from('buses')
-        .select()
-        .eq('is_available', true)
-        .count(CountOption.exact);
-
-    return response.count;
-  }
-
-  Future<int> getTotalBusCount() async {
-    final response = await _client
-        .from('buses')
-        .select()
-        .count(CountOption.exact);
-
-    return response.count;
-  }
-
-  Future<List<Map<String, dynamic>>> getBusesWithLocations(
-    String routeId,
-  ) async {
-    final response = await _client
-        .from('buses')
-        .select('''
-          *,
-          vehicle_state (*)
-        ''')
-        .eq('route_id', routeId);
-
-    final data = response as List<dynamic>? ?? [];
-    return List<Map<String, dynamic>>.from(data);
-  }
-
-  // ============================================
-  // ADMIN QUERIES
-  // ============================================
-
-  Future<Map<String, dynamic>?> authenticateAdmin(
-    String username,
-    String password,
-  ) async {
-    final response = await _client
-        .from('admins')
-        .select()
-        .eq('username', username)
-        .eq('password_hash', password)
-        .eq('is_active', true)
-        .maybeSingle();
-
-    return response;
-  }
-
-  Future<List<Map<String, dynamic>>> getAllAdmins() async {
-    final response = await _client
-        .from('admins')
-        .select()
-        .order('username', ascending: true);
-
-    return List<Map<String, dynamic>>.from(response as List);
-  }
-
-  Future<Map<String, dynamic>> createAdmin({
-    required String username,
-    required String password,
-    String? name,
-  }) async {
-    final response = await _client
-        .from('admins')
-        .insert({
-          'username': username,
-          'password_hash': password,
-          'name': name,
-          'is_active': true,
-        })
-        .select()
-        .single();
-
-    return response;
-  }
-
-  Future<void> updateAdmin(String adminId, Map<String, dynamic> updates) async {
-    await _client.from('admins').update(updates).eq('id', adminId);
-  }
-
-  Future<void> deleteAdmin(String adminId) async {
-    await _client.from('admins').delete().eq('id', adminId);
-  }
-
-  Future<List<UserModel>> getAllConductors() async {
-    final response = await _client
-        .from('users')
-        .select()
-        .eq('role', 'conductor')
-        .order('name', ascending: true);
-
-    final data = response as List<dynamic>? ?? [];
-    return data.map((user) => UserModel.fromJson(user)).toList();
-  }
-
-  Future<void> assignBusToConductor(String conductorId, String? busId) async {
-    await _client.from('users').update({'bus_id': null}).eq('id', conductorId);
-
-    if (busId != null) {
-      await _client
-          .from('users')
-          .update({'bus_id': busId})
-          .eq('id', conductorId);
-
-      await _client
-          .from('buses')
-          .update({'conductor_id': conductorId})
-          .eq('id', busId);
-    }
-  }
-
-  Future<void> updateBus(String busId, Map<String, dynamic> updates) async {
-    await _client.from('buses').update(updates).eq('id', busId);
-  }
+  Future<void> updateBus(String busId, Map<String, dynamic> updates) =>
+      buses.updateBus(busId, updates);
 
   Future<BusModel> createBus({
     required String name,
@@ -743,60 +141,298 @@ class SupabaseQueries {
     required String routeId,
     String? conductorId,
     bool isAvailable = false,
-  }) async {
-    final response = await _client
-        .from('buses')
-        .insert({
-          'name': name,
-          'registration_number': registrationNumber,
-          'route_id': routeId,
-          'conductor_id': conductorId,
-          'is_available': isAvailable,
-        })
-        .select()
-        .single();
+    String? departureTime,
+    List<BusScheduleModel> schedule = const [],
+  }) => buses.createBus(
+    name: name,
+    registrationNumber: registrationNumber,
+    routeId: routeId,
+    conductorId: conductorId,
+    isAvailable: isAvailable,
+    departureTime: departureTime,
+    schedule: schedule,
+  );
 
-    return BusModel.fromJson(response);
+  Future<void> deleteBus(String busId) => buses.deleteBus(busId);
+
+  Future<List<Map<String, dynamic>>> getBusesWithLocations(String routeId) =>
+      buses.getBusesWithLocations(routeId);
+
+  Future<int> getAvailableBusCount() => buses.getAvailableBusCount();
+
+  Future<int> getTotalBusCount() => buses.getTotalBusCount();
+
+  // ============================================
+  // ROUTE QUERIES (delegated to routes module)
+  // ============================================
+
+  Future<List<RouteModel>> getAllRoutes() => routes.getAllRoutes();
+
+  Future<RouteModel?> getRouteById(String routeId) =>
+      routes.getRouteById(routeId);
+
+  Future<List<RouteModel>> searchRoutes(String query) =>
+      routes.searchRoutes(query);
+
+  Future<List<RouteModel>> getPopularRoutes({int limit = 5}) =>
+      routes.getPopularRoutes(limit: limit);
+
+  Future<RouteModel> createRoute({
+    required String name,
+    required String startLocation,
+    required String endLocation,
+    double? distance,
+    bool isPopular = false,
+    List<StopModel> stops = const [],
+  }) => routes.createRoute(
+    name: name,
+    startLocation: startLocation,
+    endLocation: endLocation,
+    distance: distance,
+    isPopular: isPopular,
+    stops: stops,
+  );
+
+  Future<void> updateRoute(String routeId, Map<String, dynamic> updates) =>
+      routes.updateRoute(routeId, updates);
+
+  Future<void> deleteRoute(String routeId) => routes.deleteRoute(routeId);
+
+  // ============================================
+  // BUS STOP QUERIES (delegated to routes module)
+  // ============================================
+
+  Future<List<StopModel>> getAllBusStops() => routes.getAllBusStops();
+
+  Future<void> createBusStop({
+    required String name,
+    required double latitude,
+    required double longitude,
+    String? routeId,
+    int? orderIndex,
+    int? minutesFromStart,
+  }) => routes.createBusStop(
+    name: name,
+    latitude: latitude,
+    longitude: longitude,
+    routeId: routeId,
+    orderIndex: orderIndex,
+    minutesFromStart: minutesFromStart,
+  );
+
+  Future<void> updateBusStop(String stopId, Map<String, dynamic> updates) =>
+      routes.updateBusStop(stopId, updates);
+
+  Future<void> deleteBusStop(String stopId, String? routeId) =>
+      routes.deleteBusStop(stopId, routeId);
+
+  Future<List<StopModel>> getNearestBusStops(
+    double latitude,
+    double longitude, {
+    int limit = 5,
+  }) => routes.getNearestBusStops(latitude, longitude, limit: limit);
+
+  // ============================================
+  // VEHICLE QUERIES (delegated to vehicles module)
+  // ============================================
+
+  Future<void> insertVehicleObservation({
+    required String busId,
+    required double lat,
+    required double lng,
+    double? accuracyM,
+    double? speedMps,
+    double? headingDeg,
+  }) => vehicles.insertVehicleObservation(
+    busId: busId,
+    lat: lat,
+    lng: lng,
+    accuracyM: accuracyM,
+    speedMps: speedMps,
+    headingDeg: headingDeg,
+  );
+
+  Future<List<VehicleStateModel>> getAllVehicleStates() =>
+      vehicles.getAllVehicleStates();
+
+  Future<VehicleStateModel?> getVehicleState(String busId) =>
+      vehicles.getVehicleState(busId);
+
+  Stream<VehicleStateModel?> streamVehicleState(String busId) =>
+      vehicles.streamVehicleState(busId);
+
+  Stream<List<VehicleStateModel>> streamAllVehicleStates() =>
+      vehicles.streamAllVehicleStates();
+
+  Future<List<VehicleStateModel>> getVehicleStatesOnRoute(
+    String routeId,
+  ) async {
+    final busList = await buses.getBusesByRoute(routeId);
+    final busIds = busList.map((b) => b.id).toList();
+    return vehicles.getVehicleStatesOnRoute(routeId, busIds);
   }
 
-  Future<void> deleteBus(String busId) async {
-    await _client.from('users').update({'bus_id': null}).eq('bus_id', busId);
-    await _client.from('vehicle_state').delete().eq('bus_id', busId);
-    await _client.from('buses').delete().eq('id', busId);
-  }
+  // ============================================
+  // TRIP QUERIES (delegated to vehicles module)
+  // ============================================
 
-  Future<void> deleteConductor(String conductorId) async {
-    await _client
-        .from('buses')
-        .update({'conductor_id': null})
-        .eq('conductor_id', conductorId);
+  Future<BusTripModel> startTrip({
+    required String busId,
+    required String routeId,
+  }) => vehicles.startTrip(busId: busId, routeId: routeId);
 
-    await _client.from('users').delete().eq('id', conductorId);
-  }
+  Future<void> endTrip(String tripId) => vehicles.endTrip(tripId);
+
+  Future<BusTripModel?> getActiveTripForBus(String busId) =>
+      vehicles.getActiveTripForBus(busId);
+
+  Future<List<BusTripModel>> getTripHistory(String busId) =>
+      vehicles.getTripHistory(busId);
+
+  // ============================================
+  // ADMIN QUERIES (delegated to admin module)
+  // ============================================
+
+  Future<Map<String, dynamic>?> authenticateAdmin(
+    String username,
+    String password,
+  ) => admin.authenticateAdmin(username, password);
+
+  Future<List<Map<String, dynamic>>> getAllAdmins() => admin.getAllAdmins();
+
+  Future<Map<String, dynamic>> createAdmin({
+    required String username,
+    required String password,
+    String? name,
+  }) => admin.createAdmin(username: username, password: password, name: name);
+
+  Future<void> updateAdmin(String adminId, Map<String, dynamic> updates) =>
+      admin.updateAdmin(adminId, updates);
+
+  Future<void> deleteAdmin(String adminId) => admin.deleteAdmin(adminId);
+
+  // ============================================
+  // CONDUCTOR QUERIES (delegated to users module)
+  // ============================================
+
+  Future<List<UserModel>> getAllConductors() => users.getAllConductors();
+
+  Future<void> assignBusToConductor(String conductorId, String? busId) =>
+      users.assignBusToConductor(conductorId, busId);
 
   Future<UserModel> createConductor({
     required String phone,
     required String name,
     String? busId,
-  }) async {
-    final response = await _client
-        .from('users')
-        .insert({
-          'phone': phone,
-          'name': name,
-          'role': 'conductor',
-          'bus_id': busId,
-        })
-        .select()
-        .single();
-
-    return UserModel.fromJson(response);
-  }
+  }) => users.createConductor(phone: phone, name: name, busId: busId);
 
   Future<void> updateConductor(
     String conductorId,
     Map<String, dynamic> updates,
-  ) async {
-    await _client.from('users').update(updates).eq('id', conductorId);
-  }
+  ) => users.updateConductor(conductorId, updates);
+
+  Future<void> deleteConductor(String conductorId) =>
+      users.deleteConductor(conductorId);
+
+  // ============================================
+  // REVIEWS QUERIES (delegated to admin module)
+  // ============================================
+
+  Future<List<ConductorReviewModel>> getConductorReviews(String conductorId) =>
+      admin.getConductorReviews(conductorId);
+
+  Future<List<ConductorReviewModel>> getAllReviews() => admin.getAllReviews();
+
+  Future<void> deleteReview(String reviewId) => admin.deleteReview(reviewId);
+
+  Future<void> addConductorReview(ConductorReviewModel review) =>
+      admin.addConductorReview(review);
+
+  Future<ConductorReviewModel?> getConductorReview(
+    String conductorId, {
+    String? userId,
+  }) => admin.getConductorReview(conductorId, userId: userId);
+
+  Future<void> upsertConductorReview({
+    required String conductorId,
+    required int rating,
+    String? reviewText,
+    String? existingReviewId,
+    String? userId,
+  }) => admin.upsertConductorReview(
+    conductorId: conductorId,
+    rating: rating,
+    reviewText: reviewText,
+    existingReviewId: existingReviewId,
+    userId: userId,
+  );
+
+  // ============================================
+  // MODERATION QUERIES (delegated to admin module)
+  // ============================================
+
+  Future<List<String>> getModerationFilters() => admin.getModerationFilters();
+
+  Future<void> addModerationFilter(String phrase) =>
+      admin.addModerationFilter(phrase);
+
+  Future<void> deleteModerationFilter(String phrase) =>
+      admin.deleteModerationFilter(phrase);
+
+  // ============================================
+  // USER HISTORY QUERIES (delegated to users module)
+  // ============================================
+
+  Future<List<UserTripHistoryModel>> getUserTripHistory(String userId) =>
+      users.getUserTripHistory(userId);
+
+  Future<void> addUserTripToHistory({
+    required String userId,
+    required String busId,
+    String? routeId,
+  }) => users.addUserTripToHistory(
+    userId: userId,
+    busId: busId,
+    routeId: routeId,
+  );
+
+  // ============================================
+  // STUDENT APPLICATION QUERIES (delegated to users module)
+  // ============================================
+
+  Future<void> createStudentApplication({
+    required String userId,
+    required String userName,
+    required String schoolName,
+    required String idCardUrl,
+  }) => users.createStudentApplication(
+    userId: userId,
+    userName: userName,
+    schoolName: schoolName,
+    idCardUrl: idCardUrl,
+  );
+
+  Future<StudentApplicationModel?> getUserApplication(String userId) =>
+      users.getUserApplication(userId);
+
+  Future<List<StudentApplicationModel>> getPendingApplications() =>
+      users.getPendingApplications();
+
+  Future<void> updateApplicationStatus(String appId, String status) =>
+      users.updateApplicationStatus(appId, status);
+
+  // ============================================
+  // CONDUCTOR REPORTS (delegated to admin module)
+  // ============================================
+
+  Future<void> submitConductorReport(ConductorReportModel report) =>
+      admin.submitConductorReport(report);
+
+  Future<List<ConductorReportModel>> getConductorReports({
+    required String userId,
+    required String type,
+  }) => admin.getConductorReports(userId: userId, type: type);
+
+  Future<List<ConductorReportModel>> getAllConductorReports(String type) =>
+      admin.getAllConductorReports(type);
 }

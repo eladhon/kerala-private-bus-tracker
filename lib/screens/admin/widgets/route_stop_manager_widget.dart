@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+
 import '../../../models/route_model.dart';
 import '../../../models/stop_model.dart';
 import '../../../services/supabase_queries.dart';
@@ -17,18 +20,41 @@ class RouteStopManagerWidget extends StatefulWidget {
 }
 
 class _RouteStopManagerWidgetState extends State<RouteStopManagerWidget> {
+  // Helpers for time conversion
+  int? _parseDurationToMinutes(String duration) {
+    if (duration.isEmpty) return null;
+    try {
+      final parts = duration.split(':');
+      if (parts.length != 2) return null;
+      final hours = int.parse(parts[0]);
+      final minutes = int.parse(parts[1]);
+      return (hours * 60) + minutes;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  String _formatMinutesToDuration(int? minutes) {
+    if (minutes == null) return '';
+    final h = minutes ~/ 60;
+    final m = minutes % 60;
+    return '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}';
+  }
+
   final _queries = SupabaseQueries();
   final _routingService = RoutingService();
   final MapController _mapController = MapController();
 
   // Local state
   List<StopModel> _stops = [];
+  List<StopModel> _allExistingStops = []; // For auto-complete
   final List<String> _deletedStopIds = []; // IDs of stops to delete on save
   bool _hasUnsavedChanges = false;
 
   List<LatLng> _routePoints = [];
   bool _isLoading = true;
   bool _isSaving = false;
+  bool _isSearchingLocation = false;
 
   // Selection / Adding state
   LatLng? _selectedLocation;
@@ -36,12 +62,27 @@ class _RouteStopManagerWidgetState extends State<RouteStopManagerWidget> {
 
   final _nameController = TextEditingController();
   final _orderController = TextEditingController();
+  final _timeController = TextEditingController(); // New Time Controller
+  final _searchController = TextEditingController(); // For map search
+
+  // Focus node for autocomplete
+  final FocusNode _autocompleteFocus = FocusNode();
 
   @override
   void initState() {
     super.initState();
     _loadStops();
     _resetForm();
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _orderController.dispose();
+    _timeController.dispose();
+    _searchController.dispose();
+    _autocompleteFocus.dispose();
+    super.dispose();
   }
 
   @override
@@ -57,6 +98,8 @@ class _RouteStopManagerWidgetState extends State<RouteStopManagerWidget> {
     setState(() => _isLoading = true);
     try {
       final updatedRoute = await _queries.getRouteById(widget.route.id);
+      final allStops = await _queries.getAllBusStops();
+
       if (updatedRoute != null) {
         if (mounted) {
           setState(() {
@@ -64,6 +107,7 @@ class _RouteStopManagerWidgetState extends State<RouteStopManagerWidget> {
             _stops.sort(
               (a, b) => (a.orderIndex ?? 999).compareTo(b.orderIndex ?? 999),
             );
+            _allExistingStops = allStops;
             _deletedStopIds.clear();
             _hasUnsavedChanges = false;
             // Preset order for next possible stop
@@ -121,7 +165,10 @@ class _RouteStopManagerWidgetState extends State<RouteStopManagerWidget> {
     setState(() {
       _editingStop = null;
       _selectedLocation = null;
+      _selectedLocation = null;
       _nameController.clear();
+      _timeController.clear();
+      _searchController.clear();
       // Default to end of list
       _orderController.text = '${_stops.length + 1}';
     });
@@ -180,6 +227,71 @@ class _RouteStopManagerWidgetState extends State<RouteStopManagerWidget> {
     return bestIndex;
   }
 
+  // --- SEARCH & AUTO-SUGGEST ---
+
+  Future<void> _performLocationSearch(String query) async {
+    if (query.trim().isEmpty) return;
+
+    setState(() => _isSearchingLocation = true);
+    try {
+      // Use Nominatim OpenStreetMap API (Free, no key required for usage under limits)
+      // Must include User-Agent to avoid blocking
+      final url = Uri.parse(
+        'https://nominatim.openstreetmap.org/search?q=$query&format=json&limit=1',
+      );
+      final response = await http.get(
+        url,
+        headers: {'User-Agent': 'KeralaBusTrackerAdmin/1.0 (internal)'},
+      );
+
+      if (response.statusCode == 200) {
+        final List data = json.decode(response.body);
+        if (data.isNotEmpty) {
+          final firstResult = data[0];
+          final double lat = double.parse(firstResult['lat']);
+          final double lng = double.parse(firstResult['lon']);
+          final latLng = LatLng(lat, lng);
+
+          if (mounted) {
+            _mapController.move(latLng, 15);
+            setState(() => _selectedLocation = latLng);
+          }
+        } else {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text("No location found for '$query'")),
+            );
+          }
+        }
+      } else {
+        throw Exception('Failed to load location');
+      }
+    } catch (e) {
+      debugPrint('Search error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text("Search failed: $e")));
+      }
+    } finally {
+      if (mounted) setState(() => _isSearchingLocation = false);
+    }
+  }
+
+  void _onExistingStopSelected(StopModel stop) {
+    setState(() {
+      _nameController.text = stop.name;
+      final loc = LatLng(stop.lat, stop.lng);
+      _selectedLocation = loc;
+      _mapController.move(loc, 16);
+
+      if (_editingStop == null) {
+        final bestIndex = _calculateBestInsertionIndex(loc);
+        _orderController.text = (bestIndex + 1).toString();
+      }
+    });
+  }
+
   // --- BATCH LOCAL UPDATES ---
 
   void _onLocalSaveStop() {
@@ -211,6 +323,9 @@ class _RouteStopManagerWidgetState extends State<RouteStopManagerWidget> {
           lat: lat,
           lng: lng,
           orderIndex: order,
+          minutesFromStart: _timeController.text.trim().isEmpty
+              ? null
+              : _parseDurationToMinutes(_timeController.text.trim()),
         );
 
         _stops.add(newStop);
@@ -223,6 +338,9 @@ class _RouteStopManagerWidgetState extends State<RouteStopManagerWidget> {
             lat: lat,
             lng: lng,
             orderIndex: order,
+            minutesFromStart: _timeController.text.trim().isEmpty
+                ? null
+                : _parseDurationToMinutes(_timeController.text.trim()),
           );
         }
       }
@@ -292,6 +410,7 @@ class _RouteStopManagerWidgetState extends State<RouteStopManagerWidget> {
             'latitude': stop.lat,
             'longitude': stop.lng,
             'order_index': stop.orderIndex,
+            'minutes_from_start': stop.minutesFromStart,
             'route_id': widget.route.id,
           });
         }
@@ -332,6 +451,7 @@ class _RouteStopManagerWidgetState extends State<RouteStopManagerWidget> {
       _selectedLocation = LatLng(stop.lat, stop.lng);
       _nameController.text = stop.name;
       _orderController.text = stop.orderIndex?.toString() ?? '';
+      _timeController.text = _formatMinutesToDuration(stop.minutesFromStart);
 
       _mapController.move(LatLng(stop.lat, stop.lng), 15);
     });
@@ -521,6 +641,59 @@ class _RouteStopManagerWidgetState extends State<RouteStopManagerWidget> {
                           ),
                       ],
                     ),
+                    // --- SEARCH BAR OVERLAY ---
+                    Positioned(
+                      top: 16,
+                      left: 16,
+                      right: 16,
+                      child: Card(
+                        elevation: 4,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(30),
+                        ),
+                        // Use surface color for clean look
+                        color: Theme.of(context).cardColor,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                          child: TextField(
+                            controller: _searchController,
+                            decoration: InputDecoration(
+                              hintText:
+                                  'Search map locally (e.g. "Aashirvad Cineplexx Thodupuzha")',
+                              // NUCLEAR OPTION: Remove all possible borders to fix "2 layer" look
+                              border: InputBorder.none,
+                              focusedBorder: InputBorder.none,
+                              enabledBorder: InputBorder.none,
+                              errorBorder: InputBorder.none,
+                              disabledBorder: InputBorder.none,
+                              filled: false,
+                              prefixIcon: const Icon(Icons.search),
+                              suffixIcon: IconButton(
+                                icon: _isSearchingLocation
+                                    ? const SizedBox(
+                                        width: 16,
+                                        height: 16,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                    : const Icon(Icons.arrow_forward),
+                                onPressed: () => _performLocationSearch(
+                                  _searchController.text,
+                                ),
+                                tooltip: 'Go',
+                              ),
+                              contentPadding: const EdgeInsets.symmetric(
+                                vertical: 14,
+                              ),
+                            ),
+                            onSubmitted: _performLocationSearch,
+                            textInputAction: TextInputAction.search,
+                          ),
+                        ),
+                      ),
+                    ),
+
                     Positioned(
                       bottom: 16,
                       left: 16,
@@ -587,12 +760,142 @@ class _RouteStopManagerWidgetState extends State<RouteStopManagerWidget> {
                                   ?.copyWith(fontWeight: FontWeight.bold),
                             ),
                             const SizedBox(height: 12),
+                            // --- AUTO-SUGGEST FIELD ---
+                            LayoutBuilder(
+                              builder: (context, constraints) {
+                                return RawAutocomplete<StopModel>(
+                                  textEditingController: _nameController,
+                                  focusNode: _autocompleteFocus,
+                                  optionsBuilder:
+                                      (TextEditingValue textEditingValue) {
+                                        if (textEditingValue.text.isEmpty) {
+                                          return const Iterable<
+                                            StopModel
+                                          >.empty();
+                                        }
+                                        return _allExistingStops.where((
+                                          StopModel option,
+                                        ) {
+                                          return option.name
+                                              .toLowerCase()
+                                              .contains(
+                                                textEditingValue.text
+                                                    .toLowerCase(),
+                                              );
+                                        });
+                                      },
+                                  displayStringForOption: (StopModel option) =>
+                                      option.name,
+                                  onSelected: _onExistingStopSelected,
+                                  optionsViewBuilder:
+                                      (
+                                        BuildContext context,
+                                        AutocompleteOnSelected<StopModel>
+                                        onSelected,
+                                        Iterable<StopModel> options,
+                                      ) {
+                                        return Align(
+                                          alignment: Alignment.topLeft,
+                                          child: Material(
+                                            elevation: 8.0,
+                                            color: Colors.white,
+                                            child: SizedBox(
+                                              width: constraints.maxWidth,
+                                              height: 200.0,
+                                              child: ListView.builder(
+                                                padding: EdgeInsets.zero,
+                                                itemCount: options.length,
+                                                itemBuilder: (context, index) {
+                                                  final StopModel option =
+                                                      options.elementAt(index);
+                                                  return ListTile(
+                                                    dense: true,
+                                                    title: Text(
+                                                      option.name,
+                                                      style: const TextStyle(
+                                                        fontWeight:
+                                                            FontWeight.bold,
+                                                      ),
+                                                    ),
+                                                    subtitle: Text(
+                                                      '${option.lat.toStringAsFixed(4)}, ${option.lng.toStringAsFixed(4)}',
+                                                      style: TextStyle(
+                                                        color: Colors
+                                                            .grey
+                                                            .shade600,
+                                                        fontSize: 11,
+                                                      ),
+                                                    ),
+                                                    onTap: () =>
+                                                        onSelected(option),
+                                                  );
+                                                },
+                                              ),
+                                            ),
+                                          ),
+                                        );
+                                      },
+                                  fieldViewBuilder:
+                                      (
+                                        BuildContext context,
+                                        TextEditingController
+                                        textEditingController,
+                                        FocusNode focusNode,
+                                        VoidCallback onFieldSubmitted,
+                                      ) {
+                                        return TextField(
+                                          controller: textEditingController,
+                                          focusNode: focusNode,
+                                          onSubmitted: (_) =>
+                                              onFieldSubmitted(),
+                                          decoration: InputDecoration(
+                                            labelText:
+                                                'Stop Name (Auto-suggest)',
+                                            alignLabelWithHint: true,
+                                            hintText:
+                                                'Type to search existing stops...',
+                                            isDense: true,
+                                            border: const OutlineInputBorder(),
+                                            suffixIcon: const Icon(
+                                              Icons.arrow_drop_down,
+                                            ),
+                                            helperText:
+                                                'Loaded ${_allExistingStops.length} stops for suggestion',
+                                            helperStyle: TextStyle(
+                                              color: _allExistingStops.isEmpty
+                                                  ? Colors.red
+                                                  : Colors.grey,
+                                            ),
+                                          ),
+                                        );
+                                      },
+                                );
+                              },
+                            ),
+                            const SizedBox(height: 8),
+                            const SizedBox(height: 8),
+                            const SizedBox(height: 8),
+                            // Arrival Time Field
                             TextField(
-                              controller: _nameController,
-                              decoration: const InputDecoration(
-                                labelText: 'Stop Name',
+                              controller: _timeController,
+                              decoration: InputDecoration(
+                                labelText: 'Time from Start (HH:MM)',
                                 isDense: true,
-                                border: OutlineInputBorder(),
+                                border: const OutlineInputBorder(),
+                                suffixIcon: IconButton(
+                                  icon: const Icon(Icons.access_time),
+                                  onPressed: () async {
+                                    final now = TimeOfDay.now();
+                                    final picked = await showTimePicker(
+                                      context: context,
+                                      initialTime: now,
+                                    );
+                                    if (picked != null && context.mounted) {
+                                      _timeController.text =
+                                          '${picked.hour.toString().padLeft(2, '0')}:${picked.minute.toString().padLeft(2, '0')}';
+                                    }
+                                  },
+                                ),
                               ),
                             ),
                             const SizedBox(height: 8),
