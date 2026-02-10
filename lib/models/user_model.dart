@@ -6,6 +6,7 @@ class UserModel {
   final String role; // 'user' or 'conductor'
   final String? busId; // Only for conductors
   final bool isStudent; // New field
+  final String? place; // New field for user location
   final DateTime? createdAt;
 
   UserModel({
@@ -15,6 +16,7 @@ class UserModel {
     required this.role,
     this.busId,
     this.isStudent = false,
+    this.place,
     this.createdAt,
   });
 
@@ -27,6 +29,7 @@ class UserModel {
       role: json['role'] as String? ?? 'user',
       busId: json['bus_id'] as String?,
       isStudent: json['is_student'] as bool? ?? false,
+      place: json['place'] as String?,
       createdAt: json['created_at'] != null
           ? DateTime.parse(json['created_at'] as String)
           : null,
@@ -42,6 +45,7 @@ class UserModel {
       'role': role,
       'bus_id': busId,
       'is_student': isStudent,
+      'place': place,
     };
   }
 

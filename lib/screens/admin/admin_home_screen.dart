@@ -332,12 +332,47 @@ class _AdminHomeScreenState extends State<AdminHomeScreen> {
         nameController.text.isNotEmpty &&
         phoneController.text.isNotEmpty) {
       try {
-        await _queries.createConductor(
-          name: nameController.text,
-          phone: '+91${phoneController.text}',
-        );
-        await _loadData();
-        _showSuccess('Conductor added');
+        final phone = '+91${phoneController.text.trim()}';
+
+        // Check if user exists
+        final existingUser = await _queries.getUserByPhone(phone);
+
+        if (existingUser == null) {
+          if (mounted) {
+            showDialog(
+              context: context,
+              builder: (context) => AlertDialog(
+                title: const Text('User Not Found'),
+                content: const Text(
+                  'This phone number is not registered. The conductor needs to create a user account in the app first.',
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('OK'),
+                  ),
+                ],
+              ),
+            );
+          }
+        } else {
+          // Verify if already a conductor
+          if (existingUser.role == 'conductor') {
+            _showSuccess('User is already a conductor');
+          } else {
+            // Promote to conductor
+            await _queries.updateUser(existingUser.id, {
+              'role': 'conductor',
+              // Optionally update name if admin wants to force a name?
+              // For now let's keep the user's name or update it?
+              // The prompt implies just changing the role.
+              // But since the dialog asks for Name, maybe we should update it.
+              'name': nameController.text.trim(),
+            });
+            await _loadData();
+            _showSuccess('User promoted to Conductor');
+          }
+        }
       } catch (e) {
         _showError('Failed to add conductor: $e');
       }

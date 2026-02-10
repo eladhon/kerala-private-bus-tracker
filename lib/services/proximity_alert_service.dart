@@ -39,12 +39,12 @@ class ProximityAlertService {
   List<StopModel>? _routeStops;
 
   /// Start monitoring bus proximity to a stop
+  /// NOTE: This no longer subscribes to a stream. Call [checkLocation] from the main listener.
   void startMonitoring({
     required String busId,
     required String busName,
     required StopModel userStop,
     required List<StopModel> routeStops,
-    required Stream<VehicleStateModel?> busStateStream,
     List<int> alertThresholds = _defaultThresholds,
   }) {
     // Stop any existing monitoring
@@ -59,20 +59,14 @@ class ProximityAlertService {
     debugPrint(
       'ProximityAlert: Started monitoring $busName → ${userStop.name}',
     );
+  }
 
-    // Subscribe to bus state updates
-    final subscription = busStateStream.listen(
-      (state) {
-        if (state != null) {
-          _checkProximity(state, alertThresholds);
-        }
-      },
-      onError: (error) {
-        debugPrint('ProximityAlert: Stream error - $error');
-      },
-    );
-
-    _activeMonitors[busId] = subscription;
+  /// Check location from an external stream listener
+  void checkLocation(
+    VehicleStateModel state, {
+    List<int> alertThresholds = _defaultThresholds,
+  }) {
+    _checkProximity(state, alertThresholds);
   }
 
   /// Stop all monitoring

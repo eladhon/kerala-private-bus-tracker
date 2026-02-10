@@ -18,11 +18,15 @@ class SupabaseService {
   }
 
   /// Check if user is currently logged in
-  bool get isLoggedIn => client.auth.currentUser != null;
+  /// Check if user is currently logged in
+  @Deprecated('Disabled for demo mode')
+  bool get isLoggedIn => false; // Disabled for demo mode using public.users only
 
   /// Get current user ID
-  String? get currentUserId => client.auth.currentUser?.id;
+  @Deprecated('Disabled for demo mode')
+  String? get currentUserId => null; // Disabled for demo mode using public.users only
 
   /// Get current user phone
-  String? get currentUserPhone => client.auth.currentUser?.phone;
+  @Deprecated('Disabled for demo mode')
+  String? get currentUserPhone => null; // Disabled for demo mode using public.users only
 }

@@ -4,8 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'services/supabase_service.dart';
 import 'services/tile_cache_service.dart';
-import 'screens/auth/login_screen.dart';
+// import 'screens/auth/login_screen.dart';
 import 'screens/web_app_selector.dart';
+import 'screens/auth_wrapper.dart';
 import 'app_theme.dart';
 
 import 'services/theme_manager.dart';
@@ -66,8 +67,8 @@ class KeralaBusTrackerApp extends StatelessWidget {
           darkTheme: AppTheme.darkTheme,
           themeMode: ThemeManager.instance.themeMode,
           // On web: show app selector (admin or mobile)
-          // On mobile: go directly to login
-          home: kIsWeb ? const WebAppSelector() : const LoginScreen(),
+          // On mobile: go directly to login (via auth wrapper)
+          home: kIsWeb ? const WebAppSelector() : const AuthWrapper(),
         );
       },
     );

@@ -15,7 +15,7 @@ class VehicleQueries {
   // VEHICLE OBSERVATION / STATE QUERIES
   // ============================================
 
-  /// Insert raw GPS observation
+  /// Insert raw GPS observation and update vehicle state for real-time streaming
   Future<void> insertVehicleObservation({
     required String busId,
     required double lat,
@@ -24,14 +24,30 @@ class VehicleQueries {
     double? speedMps,
     double? headingDeg,
   }) async {
-    await _client.from('vehicle_observations').insert({
+    // Insert observation and get ID
+    final observationResponse = await _client
+        .from('vehicle_observations')
+        .insert({
+          'bus_id': busId,
+          'lat': lat,
+          'lng': lng,
+          'accuracy_m': accuracyM,
+          'speed_mps': speedMps,
+          'heading_deg': headingDeg,
+          'observed_at': DateTime.now().toUtc().toIso8601String(),
+        })
+        .select('id')
+        .single();
+
+    // Upsert to vehicle_state for real-time streaming
+    await _client.from('vehicle_state').upsert({
       'bus_id': busId,
       'lat': lat,
       'lng': lng,
-      'accuracy_m': accuracyM,
-      'speed_mps': speedMps,
-      'heading_deg': headingDeg,
-      'observed_at': DateTime.now().toUtc().toIso8601String(),
+      'speed_mps': speedMps ?? 0,
+      'heading_deg': headingDeg ?? 0,
+      'updated_at': DateTime.now().toUtc().toIso8601String(),
+      'observation_id': observationResponse['id'],
     });
   }
 

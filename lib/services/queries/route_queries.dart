@@ -10,19 +10,56 @@ import '../../models/stop_model.dart';
 class RouteQueries {
   final SupabaseClient _client = SupabaseService().client;
 
-  /// Get all routes
+  // In-memory cache for routes with TTL
+  static List<RouteModel>? _allRoutesCache;
+  static DateTime? _allRoutesCacheTime;
+  static final Map<String, RouteModel> _routeByIdCache = {};
+  static final Map<String, DateTime> _routeByIdCacheTime = {};
+  static const _cacheTtl = Duration(minutes: 5);
+
+  /// Clear all cached data (call after mutations)
+  void clearCache() {
+    _allRoutesCache = null;
+    _allRoutesCacheTime = null;
+    _routeByIdCache.clear();
+    _routeByIdCacheTime.clear();
+  }
+
+  /// Get all routes (cached)
   Future<List<RouteModel>> getAllRoutes() async {
+    // Check cache
+    if (_allRoutesCache != null &&
+        _allRoutesCacheTime != null &&
+        DateTime.now().difference(_allRoutesCacheTime!) < _cacheTtl) {
+      return _allRoutesCache!;
+    }
+
     final response = await _client
         .from('routes')
         .select('*')
         .order('name', ascending: true);
 
     final data = response as List<dynamic>? ?? [];
-    return data.map((route) => RouteModel.fromJson(route)).toList();
+    final routes = data.map((route) => RouteModel.fromJson(route)).toList();
+
+    // Update cache
+    _allRoutesCache = routes;
+    _allRoutesCacheTime = DateTime.now();
+
+    return routes;
   }
 
-  /// Get route by ID
+  /// Get route by ID (cached)
   Future<RouteModel?> getRouteById(String routeId) async {
+    // Check cache
+    final cachedRoute = _routeByIdCache[routeId];
+    final cacheTime = _routeByIdCacheTime[routeId];
+    if (cachedRoute != null &&
+        cacheTime != null &&
+        DateTime.now().difference(cacheTime) < _cacheTtl) {
+      return cachedRoute;
+    }
+
     final response = await _client
         .from('routes')
         .select('*')
@@ -30,7 +67,11 @@ class RouteQueries {
         .maybeSingle();
 
     if (response != null) {
-      return RouteModel.fromJson(response);
+      final route = RouteModel.fromJson(response);
+      // Update cache
+      _routeByIdCache[routeId] = route;
+      _routeByIdCacheTime[routeId] = DateTime.now();
+      return route;
     }
     return null;
   }
@@ -237,5 +278,13 @@ class RouteQueries {
     });
 
     return allStops.take(limit).toList();
+  }
+
+  /// Get all routes that pass through a given stop
+  Future<List<RouteModel>> getRoutesForStop(String stopId) async {
+    final allRoutes = await getAllRoutes();
+    return allRoutes.where((route) {
+      return route.busStops.any((stop) => stop.id == stopId);
+    }).toList();
   }
 }

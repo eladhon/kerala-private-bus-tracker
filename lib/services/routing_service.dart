@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 import 'package:google_polyline_algorithm/google_polyline_algorithm.dart';
+import 'package:flutter/foundation.dart';
 import '../models/stop_model.dart';
 
 /// Service to calculate route paths using OSRM
@@ -24,6 +25,11 @@ class RoutingService {
   /// Get the walking path connecting a list of points (LatLng)
   Future<List<LatLng>> getWalkingPolyline(List<LatLng> points) async {
     return _fetchPolyline(points, _baseWalkingUrl);
+  }
+
+  /// Get the driving path connecting a list of points (LatLng)
+  Future<List<LatLng>> getDrivingPolyline(List<LatLng> points) async {
+    return _fetchPolyline(points, _baseDrivingUrl);
   }
 
   Future<List<LatLng>> _fetchPolyline(
@@ -57,30 +63,10 @@ class RoutingService {
           );
 
       if (response.statusCode == 200) {
-        final data = json.decode(response.body);
+        // Use compute to parse in background isolate
+        final decodedLatLng = await compute(_parseRouteResponse, response.body);
 
-        if (data['code'] != 'Ok') {
-          return fallbackPath;
-        }
-
-        final routes = data['routes'] as List;
-        if (routes.isEmpty) {
-          return fallbackPath;
-        }
-
-        // 3. Decode geometry using google_polyline_algorithm
-        final geometry = routes[0]['geometry'] as String;
-
-        final decodedPoints = decodePolyline(
-          geometry,
-        ); // List<List<num>> [lat, lng]
-
-        // Convert to LatLng
-        final decodedLatLng = decodedPoints.map((pt) {
-          return LatLng(pt[0].toDouble(), pt[1].toDouble());
-        }).toList();
-
-        if (decodedLatLng.length < 2) {
+        if (decodedLatLng.isEmpty) {
           return fallbackPath;
         }
         return decodedLatLng;
@@ -89,6 +75,27 @@ class RoutingService {
       }
     } catch (e) {
       return fallbackPath;
+    }
+  }
+
+  /// Top-level function for background parsing
+  Future<List<LatLng>> _parseRouteResponse(String responseBody) async {
+    try {
+      final data = json.decode(responseBody);
+      if (data['code'] != 'Ok') return [];
+
+      final routes = data['routes'] as List;
+      if (routes.isEmpty) return [];
+
+      final geometry = routes[0]['geometry'] as String;
+      final decodedPoints = decodePolyline(geometry);
+
+      return decodedPoints
+          .map((pt) => LatLng(pt[0].toDouble(), pt[1].toDouble()))
+          .toList();
+    } catch (e) {
+      debugPrint("Error parsing route in isolate: $e");
+      return [];
     }
   }
 }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../../services/supabase_queries.dart';
 import 'otp_screen.dart';
+import 'registration_screen.dart';
 
 /// Login screen with mobile number input
 class LoginScreen extends StatefulWidget {
@@ -53,16 +54,39 @@ class _LoginScreenState extends State<LoginScreen> {
       String role = 'user';
 
       if (user == null) {
-        // Auto-register new user as Passenger
-        try {
-          await _queries.createUser(
-            phone: phone,
-            name: 'Passenger',
-            role: 'user',
+        if (mounted) {
+          final shouldRegister = await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('User Not Found'),
+              content: const Text(
+                'No account exists for this number. Do you want to create a new account?',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  child: const Text('Create Account'),
+                ),
+              ],
+            ),
           );
-        } catch (e) {
-          debugPrint('Error creating user: $e');
+
+          if (shouldRegister == true && mounted) {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => RegistrationScreen(phoneNumber: phone),
+              ),
+            );
+          }
         }
+        // Return to prevent proceeding to OTP screen directly
+        // The RegistrationScreen will handle the flow
+        return;
       } else {
         role = user.role;
       }
@@ -70,7 +94,8 @@ class _LoginScreenState extends State<LoginScreen> {
       // For now, navigate directly to home based on role (simplified auth)
       // In production, you would use Supabase OTP authentication
       if (mounted) {
-        Navigator.pushReplacement(
+        // Use push to allow user to go back if number is wrong
+        Navigator.push(
           context,
           MaterialPageRoute(
             builder: (context) => OtpScreen(phoneNumber: phone, userRole: role),

@@ -1,10 +1,10 @@
 import 'dart:async';
-import 'dart:math' as math;
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_map_location_marker/flutter_map_location_marker.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:intl/intl.dart';
 import 'package:geolocator/geolocator.dart';
 import '../../services/supabase_queries.dart';
 import '../../models/bus_model.dart';
@@ -48,14 +48,16 @@ class BusTrackingScreen extends StatefulWidget {
 }
 
 class _BusTrackingScreenState extends State<BusTrackingScreen>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   final _queries = SupabaseQueries();
+  // Map & Location
   final MapController _mapController = MapController();
+  // late final Ticker _ticker; // REMOVED DUPLICATE
+  late TabController _tabController;
   // Removed DraggableScrollableController
 
   // Real-time tracking variables
-  VehicleStateModel? _lastPacket;
-  DateTime? _lastPacketTime;
+  // Real-time tracking variables
   VehicleStateModel? _interpolatedLocation; // The location we show on UI
 
   // Conductor & Reviews
@@ -66,9 +68,6 @@ class _BusTrackingScreenState extends State<BusTrackingScreen>
   bool _isReminderSet = false;
   bool _isPanelExpanded = false;
   bool _hasNotified = false;
-
-  // Ticker for smooth animation (dead reckoning)
-  late final Ticker _ticker;
 
   Position? _userPosition;
   StreamSubscription? _locationSubscription;
@@ -89,22 +88,63 @@ class _BusTrackingScreenState extends State<BusTrackingScreen>
   String? _nextStopName;
   final _routingService = RoutingService();
 
+  // Hybrid Interpolation State
+  List<LatLng> _animationPath =
+      []; // The path segment currently being traversed
+  double _totalPathDistance = 0; // Total distance of _animationPath
+
   // ETA & Proximity Services
   final _etaService = EtaService();
   final _proximityService = ProximityAlertService();
   EtaResult? _etaResult;
   StopModel? _userDestStopModel;
 
+  late BusModel _bus;
+
   @override
   void initState() {
     super.initState();
-    _ticker = createTicker(_onTick);
-    _ticker.start();
+    _bus = widget.bus;
+    // Ticker for smooth animation (dead reckoning) -> Replaced by internal logic
+    // _ticker = createTicker(_onTick)..start(); // REMOVED: Using Stream logic for path
+    _tabController = TabController(length: 2, vsync: this);
     _initializeTracking();
+    _fetchBusDetails();
     _fetchRoutePolyline();
     _fetchConductorDetails();
     _fetchFavoriteStatus();
     _isReminderSet = ReminderService().isReminderSet(widget.bus.id);
+  }
+
+  Future<void> _fetchBusDetails() async {
+    try {
+      final freshBus = await _queries.getBusById(widget.bus.id);
+      if (freshBus != null && mounted) {
+        setState(() {
+          _bus = freshBus;
+        });
+        debugPrint(
+          "Bus details refreshed. Schedule items: ${_bus.schedule.length}",
+        );
+        if (_bus.schedule.isNotEmpty) {
+          debugPrint(
+            "First schedule item: route=${_bus.schedule.first.routeId}, time=${_bus.schedule.first.departureTime}",
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint("Error fetching bus details: $e");
+    }
+  }
+
+  @override
+  void dispose() {
+    _animationTicker?.dispose();
+    _tabController.dispose();
+    _locationSubscription?.cancel();
+    _refreshTimer?.cancel();
+    _proximityService.stopMonitoring();
+    super.dispose();
   }
 
   Future<void> _fetchFavoriteStatus() async {
@@ -168,11 +208,14 @@ class _BusTrackingScreenState extends State<BusTrackingScreen>
             point: LatLng(stop.lat, stop.lng),
             width: 12,
             height: 12,
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.white,
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.blue, width: 2),
+            child: GestureDetector(
+              onTap: () => _showStopDetails(stop),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.blue, width: 2),
+                ),
               ),
             ),
           );
@@ -319,6 +362,9 @@ class _BusTrackingScreenState extends State<BusTrackingScreen>
                 .toList();
             _fitRouteToBounds(stopPoints);
           }
+
+          // Now start proximity alerts with populated route data
+          _startProximityAlerts();
         }
       }
     } catch (e) {
@@ -336,44 +382,170 @@ class _BusTrackingScreenState extends State<BusTrackingScreen>
     );
   }
 
-  /// Dead reckoning tick loop (runs every frame)
-  void _onTick(Duration elapsed) {
-    if (_lastPacket == null || _lastPacketTime == null) {
+  /// Calculates the road path between current location and new target
+  /// and starts the animation
+  Future<void> _animateToNewLocation(VehicleStateModel newPacket) async {
+    if (_interpolatedLocation == null) {
+      setState(() => _interpolatedLocation = newPacket);
       return;
     }
 
-    // Only interpolate if moving and data is fresh (<30s old)
-    // If data is too old, stop moving to avoid showing it driving off the map forever
-    final timeSincePacket = DateTime.now().difference(_lastPacketTime!);
-    if (timeSincePacket.inSeconds > 30 || _lastPacket!.speedKmh < 0.5) {
-      return;
-    }
+    final start = _interpolatedLocation!.latLng;
+    final end = newPacket.latLng;
 
-    // Calculate distance moved: speedMps is already in m/s
-    final speedMs = _lastPacket!.speedMps;
-    final elapsedSincePacket = timeSincePacket.inMilliseconds / 1000.0;
+    // 1. Attempt Snap-to-Route
+    List<LatLng>? path = _trySnapToRoute(start, end);
 
-    // Calculate new lat/lng based on heading and distance
-    final newPos = _calculateNewPosition(
-      _lastPacket!.lat,
-      _lastPacket!.lng,
-      speedMs,
-      _lastPacket!.headingDeg,
-      elapsedSincePacket,
-    );
-
-    setState(() {
-      _interpolatedLocation = _lastPacket!.copyWith(
-        lat: newPos.latitude,
-        lng: newPos.longitude,
+    // 2. Fallback to OSRM (Smart Detour)
+    if (path == null) {
+      debugPrint(
+        "HybridInterpolation: Off-route detected. Fetching OSRM path...",
       );
-      _calculateNextStop(); // Recalculate next stop
-      _checkReminder();
-    });
-
-    if (_followBus) {
-      _centerOnBus();
+      path = await _routingService.getDrivingPolyline([start, end]);
     }
+
+    // 3. Start Animation
+    _startAnimation(path, newPacket);
+  }
+
+  List<LatLng>? _trySnapToRoute(LatLng start, LatLng end) {
+    if (_routePoints.isEmpty) return null;
+
+    final startIdx = _findNearestRouteIndex(start);
+    final endIdx = _findNearestRouteIndex(end);
+
+    // If points are too far from route (>50m), fail snap (return null)
+    if (_getDistance(start, _routePoints[startIdx]) > 50 ||
+        _getDistance(end, _routePoints[endIdx]) > 50) {
+      return null;
+    }
+
+    // Determine direction
+    if (startIdx <= endIdx) {
+      // Forward
+      final segment = _routePoints.sublist(startIdx, endIdx + 1);
+      return [start, ...segment, end];
+    } else {
+      // Loop or backward? Bus usually doesn't reverse.
+      // Could be end of route loop. Let OSRM handle it.
+      return null;
+    }
+  }
+
+  int _findNearestRouteIndex(LatLng point) {
+    int nearest = -1;
+    double minDist = double.infinity;
+    const distance = Distance();
+
+    for (int i = 0; i < _routePoints.length; i++) {
+      final d = distance.as(LengthUnit.Meter, point, _routePoints[i]);
+      if (d < minDist) {
+        minDist = d;
+        nearest = i;
+      }
+    }
+    return nearest;
+  }
+
+  double _getDistance(LatLng a, LatLng b) {
+    return const Distance().as(LengthUnit.Meter, a, b);
+  }
+
+  Ticker? _animationTicker;
+  double _plannedDurationSeconds = 15.0; // Assume 15s avg update rate
+
+  void _startAnimation(List<LatLng> path, VehicleStateModel targetState) {
+    _animationTicker?.dispose();
+    _animationPath = path;
+    _totalPathDistance = 0;
+    for (int i = 0; i < path.length - 1; i++) {
+      _totalPathDistance += _getDistance(path[i], path[i + 1]);
+    }
+
+    // Speed-based duration? Or fixed?
+    // Use fixed 15s (update interval) but clamp limits
+    // Speed (m/s) = dist / time
+    // If speed is known (targetState.speedMps), use it, but protect against stalling
+    double speed = targetState.speedMps > 1
+        ? targetState.speedMps
+        : 5.0; // min 5m/s (~18km/h)
+    _plannedDurationSeconds = (_totalPathDistance / speed).clamp(5.0, 20.0);
+
+    // _animationStartTime = DateTime.now(); // REMOVED
+    DateTime? _lastTickerUpdate;
+    _animationTicker = createTicker((elapsed) {
+      final elapsedSeconds = elapsed.inMicroseconds / 1000000.0;
+      if (elapsedSeconds >= _plannedDurationSeconds) {
+        setState(() => _interpolatedLocation = targetState);
+        _animationTicker?.stop();
+        return;
+      }
+
+      final progress = elapsedSeconds / _plannedDurationSeconds;
+      final distToTravel = _totalPathDistance * progress;
+
+      final newLatLng = _interpolateAlongPath(distToTravel);
+
+      // Update internal state without setState for smooth animation
+      _interpolatedLocation = targetState.copyWith(
+        lat: newLatLng.latitude,
+        lng: newLatLng.longitude,
+      );
+
+      // Throttle setState to once per second to avoid excessive rebuilds
+      final now = DateTime.now();
+      if (_lastTickerUpdate == null ||
+          now.difference(_lastTickerUpdate!).inMilliseconds >= 1000) {
+        _lastTickerUpdate = now;
+        if (mounted) {
+          setState(
+            () {},
+          ); // Trigger rebuild for UI elements that depend on _interpolatedLocation
+          _calculateNextStop();
+          _checkReminder();
+        }
+      }
+
+      // Move camera smoothly without full rebuild
+      if (_followBus && _interpolatedLocation != null) {
+        final lat = _interpolatedLocation!.latLng.latitude;
+        final lng = _interpolatedLocation!.latLng.longitude;
+        // Guard against NaN values from interpolation edge cases
+        if (!lat.isNaN && !lng.isNaN) {
+          _mapController.move(
+            _interpolatedLocation!.latLng,
+            _mapController.camera.zoom,
+          );
+        }
+      }
+    })..start();
+  }
+
+  LatLng _interpolateAlongPath(double dist) {
+    if (_animationPath.isEmpty || _animationPath.length < 2) {
+      return _interpolatedLocation?.latLng ?? const LatLng(0, 0);
+    }
+    if (dist.isNaN || dist <= 0) return _animationPath.first;
+
+    double d = 0;
+    for (int i = 0; i < _animationPath.length - 1; i++) {
+      final segmentLen = _getDistance(_animationPath[i], _animationPath[i + 1]);
+      if (d + segmentLen >= dist) {
+        // Target is in this segment
+        final remaining = dist - d;
+        final fraction = remaining / segmentLen;
+        return LatLng(
+          _animationPath[i].latitude +
+              (_animationPath[i + 1].latitude - _animationPath[i].latitude) *
+                  fraction,
+          _animationPath[i].longitude +
+              (_animationPath[i + 1].longitude - _animationPath[i].longitude) *
+                  fraction,
+        );
+      }
+      d += segmentLen;
+    }
+    return _animationPath.last;
   }
 
   void _checkReminder() {
@@ -468,39 +640,7 @@ class _BusTrackingScreenState extends State<BusTrackingScreen>
     });
   }
 
-  LatLng _calculateNewPosition(
-    double lat,
-    double lng,
-    double speedMs,
-    double heading,
-    double elapsedSeconds,
-  ) {
-    const R = 6371000.0; // Earth radius in meters
-    final distance = speedMs * elapsedSeconds;
-
-    final lat1 = lat * math.pi / 180;
-    final lng1 = lng * math.pi / 180;
-    final brng = heading * math.pi / 180;
-
-    final lat2 = math.asin(
-      math.sin(lat1) * math.cos(distance / R) +
-          math.cos(lat1) * math.sin(distance / R) * math.cos(brng),
-    );
-    final lng2 =
-        lng1 +
-        math.atan2(
-          math.sin(brng) * math.sin(distance / R) * math.cos(lat1),
-          math.cos(distance / R) - math.sin(lat1) * math.sin(lat2),
-        );
-
-    return LatLng(lat2 * 180 / math.pi, lng2 * 180 / math.pi);
-  }
-
   void _calculateNextStop() {
-    debugPrint(
-      "_calculateNextStop: Stops=${_routeStops.length}, Loc=${_interpolatedLocation != null}",
-    );
-
     if (_interpolatedLocation == null || _routeStops.isEmpty) return;
 
     // Find nearest stop and check if we passed it (simple proximity for now)
@@ -532,7 +672,6 @@ class _BusTrackingScreenState extends State<BusTrackingScreen>
       } else {
         _nextStopName = "End of Trip";
       }
-      debugPrint("_calculateNextStop: Set Next Stop to $_nextStopName");
     }
 
     // Calculate ETA to user's destination stop
@@ -576,13 +715,12 @@ class _BusTrackingScreenState extends State<BusTrackingScreen>
       routeStops: _routeStops,
     );
 
-    if (mounted) {
+    if (mounted && _etaResult?.formattedEta != result.formattedEta) {
       setState(() {
         _etaResult = result;
       });
     }
-
-    debugPrint("ETA calculated: ${result.formattedEta} to ${targetStop.name}");
+    // Removed debugPrint to prevent lag
   }
 
   /// Get color based on ETA status
@@ -601,14 +739,7 @@ class _BusTrackingScreenState extends State<BusTrackingScreen>
     }
   }
 
-  @override
-  void dispose() {
-    _ticker.dispose();
-    _locationSubscription?.cancel();
-    _refreshTimer?.cancel();
-    _proximityService.stopMonitoring();
-    super.dispose();
-  }
+  DateTime? _lastStreamUpdate;
 
   Future<void> _initializeTracking() async {
     // Get user's current location
@@ -617,38 +748,47 @@ class _BusTrackingScreenState extends State<BusTrackingScreen>
     // Get initial bus location
     await _fetchBusLocation();
 
-    // Start real-time stream for bus location
+    // Start real-time stream for bus location (throttled to 1 update/second)
     _locationSubscription = _queries
         .streamVehicleState(widget.bus.id)
         .listen(
           (location) {
-            if (mounted && location != null) {
-              _lastPacket = location;
-              _lastPacketTime = DateTime.now();
-              // Reset interpolation to actual location when new packet arrives
-              setState(() {
-                _interpolatedLocation = location;
-                _calculateNextStop(); // Recalculate next stop
-              });
+            if (!mounted || location == null) return;
 
-              if (_followBus) {
-                _centerOnBus();
-              }
+            // Throttle: only update UI at most once per second
+            final now = DateTime.now();
+            if (_lastStreamUpdate != null &&
+                now.difference(_lastStreamUpdate!).inMilliseconds < 1000) {
+              return;
+            }
+            _lastStreamUpdate = now;
+
+            // Trigger animation to new location
+            _animateToNewLocation(location);
+
+            // Forward to proximity service if monitoring
+            if (_proximityService.isMonitoring) {
+              _proximityService.checkLocation(location);
+            }
+
+            // Defer expensive calculations outside setState
+            _calculateNextStop();
+
+            if (_followBus) {
+              _centerOnBus();
             }
           },
           onError: (error) {
             debugPrint('Location stream error: $error');
+            // Fallback: start polling if stream fails
+            _refreshTimer ??= Timer.periodic(
+              const Duration(seconds: _refreshIntervalSeconds),
+              (_) => _fetchBusLocation(),
+            );
           },
         );
 
-    // Also poll every 10 seconds as backup
-    _refreshTimer = Timer.periodic(
-      const Duration(seconds: _refreshIntervalSeconds),
-      (_) => _fetchBusLocation(),
-    );
-
-    // Start proximity alerts if user has a destination stop
-    _startProximityAlerts();
+    // NOTE: Proximity alerts started later after route data is ready in _fetchRoutePolyline
   }
 
   /// Start proximity alerts for bus approach notifications
@@ -660,7 +800,6 @@ class _BusTrackingScreenState extends State<BusTrackingScreen>
         busName: widget.bus.name,
         userStop: _userDestStopModel!,
         routeStops: _routeStops,
-        busStateStream: _queries.streamVehicleState(widget.bus.id),
       );
       debugPrint('ProximityAlerts: Started for ${_userDestStopModel!.name}');
     }
@@ -679,11 +818,14 @@ class _BusTrackingScreenState extends State<BusTrackingScreen>
 
   Future<void> _fetchBusLocation() async {
     try {
+      debugPrint("Fetching bus location for ${widget.bus.id}...");
+      debugPrint("Fetching bus location for ${widget.bus.id}...");
+
       final location = await _queries.getVehicleState(widget.bus.id);
+      debugPrint("Fetch result: $location");
+
       if (mounted && location != null) {
         setState(() {
-          _lastPacket = location;
-          _lastPacketTime = DateTime.now();
           // Initially set interpolated location to actual
           _interpolatedLocation ??= location;
           _calculateNextStop(); // Recalculate next stop
@@ -691,10 +833,234 @@ class _BusTrackingScreenState extends State<BusTrackingScreen>
         if (_followBus) {
           _centerOnBus();
         }
-      } else {}
+      } else {
+        debugPrint("Fetch returned null or widget not mounted");
+      }
     } catch (e) {
       debugPrint('Error fetching bus location: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Fetch Error: $e')));
+      }
     }
+  }
+
+  String _calculateStopTime(StopModel stop, int index) {
+    // Use minutesFromStart if available, otherwise estimate based on index
+    // Assume average 5 minutes between stops as a rough estimate
+    final minutesOffset = stop.minutesFromStart ?? (index * 5);
+
+    String? departureTimeStr;
+
+    // Try to find specific schedule for this route
+    if (_bus.schedule.isNotEmpty) {
+      // 1. Try matching user's selected route (e.g. from search)
+      if (widget.selectedRouteId != null) {
+        try {
+          departureTimeStr = _bus.schedule
+              .firstWhere((s) => s.routeId == widget.selectedRouteId)
+              .departureTime;
+        } catch (_) {}
+      }
+
+      // 2. Try matching bus's primary route
+      if (departureTimeStr == null) {
+        try {
+          departureTimeStr = _bus.schedule
+              .firstWhere((s) => s.routeId == _bus.routeId)
+              .departureTime;
+        } catch (_) {}
+      }
+
+      // 3. Fallback to first schedule item
+      departureTimeStr ??= _bus.schedule.firstOrNull?.departureTime;
+    }
+
+    // 4. Legacy fallback
+    departureTimeStr ??= _bus.departureTime;
+
+    if (departureTimeStr == null || departureTimeStr.isEmpty) {
+      return '--:--';
+    }
+
+    try {
+      final parts = departureTimeStr.split(':');
+      final now = DateTime.now();
+      final departureDate = DateTime(
+        now.year,
+        now.month,
+        now.day,
+        int.parse(parts[0]),
+        int.parse(parts[1]),
+      );
+      final stopDate = departureDate.add(Duration(minutes: minutesOffset));
+      return DateFormat('hh:mm a').format(stopDate);
+    } catch (e) {
+      return '--:--';
+    }
+  }
+
+  Widget _buildStopsTab() {
+    if (_routeStops.isEmpty) {
+      return const Center(child: Text("No stops data available"));
+    }
+
+    return ListView.builder(
+      padding: EdgeInsets.zero,
+      itemCount: _routeStops.length,
+      itemBuilder: (context, index) {
+        final stop = _routeStops[index];
+        final isNextStop = stop.name == _nextStopName;
+        // Determine isPassed based on current index vs nearest index logic
+        // But for simply display, we might just highlight selected/next
+
+        return ListTile(
+          onTap: () {
+            _mapController.move(LatLng(stop.lat, stop.lng), 16);
+            setState(() {
+              _isPanelExpanded = false; // Collapse to let user see map
+            });
+          },
+          leading: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                Icons.circle,
+                size: 12,
+                color: isNextStop ? Colors.green : Colors.grey,
+              ),
+              if (index != _routeStops.length - 1)
+                Container(
+                  height: 20,
+                  width: 2,
+                  color: Colors.grey.withValues(alpha: 0.3),
+                ),
+            ],
+          ),
+          title: Text(
+            stop.name,
+            style: TextStyle(
+              fontWeight: isNextStop ? FontWeight.bold : FontWeight.normal,
+              color: isNextStop
+                  ? Colors.green
+                  : Theme.of(context).colorScheme.onSurface,
+            ),
+          ),
+          trailing: Text(
+            _calculateStopTime(stop, index),
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        );
+      },
+    );
+  }
+
+  void _showStopDetails(StopModel stop) {
+    // Calculate scheduled time
+    final scheduledTime = _calculateStopTime(stop, stop.orderIndex ?? 0);
+
+    // Calculate Live ETA
+    String liveEta = "--";
+    if (_interpolatedLocation != null) {
+      final dist = const Distance().as(
+        LengthUnit.Meter,
+        _interpolatedLocation!.latLng,
+        LatLng(stop.lat, stop.lng),
+      );
+      // Rough estimate: 30km/h = 8.33 m/s
+      final seconds = dist / 8.33;
+      if (seconds < 60) {
+        liveEta = "Arriving now";
+      } else {
+        liveEta = "${(seconds / 60).round()} min";
+      }
+    }
+
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) => Container(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.primaryContainer,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    Icons.directions_bus_filled,
+                    color: Theme.of(context).colorScheme.onPrimaryContainer,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Text(
+                    stop.name,
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 24),
+            SingleChildScrollView(
+              // wrapped in scroll view just in case
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                children: [
+                  _buildDetailItem(
+                    context,
+                    "Scheduled",
+                    scheduledTime,
+                    Icons.schedule,
+                  ),
+                  const SizedBox(width: 24), // minimal spacing
+                  _buildDetailItem(context, "Live ETA", liveEta, Icons.timer),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDetailItem(
+    BuildContext context,
+    String label,
+    String value,
+    IconData icon,
+  ) {
+    return Column(
+      children: [
+        Icon(icon, color: Theme.of(context).colorScheme.primary),
+        const SizedBox(height: 8),
+        Text(
+          value,
+          style: Theme.of(
+            context,
+          ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+        ),
+        Text(
+          label,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ],
+    );
   }
 
   void _centerOnBus() {
@@ -723,125 +1089,132 @@ class _BusTrackingScreenState extends State<BusTrackingScreen>
     return Scaffold(
       body: Stack(
         children: [
-          // Map
-          FlutterMap(
-            mapController: _mapController,
-            options: MapOptions(
-              initialCenter:
-                  _interpolatedLocation?.latLng ??
-                  const LatLng(10.8505, 76.2711),
-              initialZoom: 12,
-              onPositionChanged: (position, hasGesture) {
-                if (hasGesture) {
-                  setState(() => _followBus = false);
-                }
-              },
-            ),
-            children: [
-              TileLayer(
-                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                userAgentPackageName: 'com.keralab.bustracker',
+          // Map - wrapped in RepaintBoundary to isolate map repaints
+          RepaintBoundary(
+            child: FlutterMap(
+              mapController: _mapController,
+              options: MapOptions(
+                initialCenter:
+                    _interpolatedLocation?.latLng ??
+                    const LatLng(10.8505, 76.2711),
+                initialZoom: 12,
+                onPositionChanged: (position, hasGesture) {
+                  if (hasGesture) {
+                    setState(() => _followBus = false);
+                  }
+                },
               ),
-              // Route Polyline Layer (Background - Gray)
-              if (_routePoints.isNotEmpty)
-                PolylineLayer(
-                  polylines: [
-                    Polyline(
-                      points: _routePoints,
-                      strokeWidth: 4.0,
-                      color: Colors.grey.withValues(alpha: 0.5), // Lighter gray
-                    ),
-                  ],
+              children: [
+                TileLayer(
+                  urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                  userAgentPackageName: 'com.keralab.bustracker',
                 ),
-              // Walking Path (Dotted)
-              if (_walkingToSourcePoints.isNotEmpty ||
-                  _walkingFromDestPoints.isNotEmpty)
-                PolylineLayer(
-                  polylines: [
-                    if (_walkingToSourcePoints.isNotEmpty)
+                // Route Polyline Layer (Background - Gray)
+                if (_routePoints.isNotEmpty)
+                  PolylineLayer(
+                    polylines: [
                       Polyline(
-                        points: _walkingToSourcePoints,
-                        strokeWidth: 3.0,
-                        color: Colors.blue.withValues(alpha: 0.6),
-                        pattern: const StrokePattern.dotted(),
+                        points: _routePoints,
+                        strokeWidth: 4.0,
+                        color: Colors.grey.withValues(
+                          alpha: 0.5,
+                        ), // Lighter gray
                       ),
-                    if (_walkingFromDestPoints.isNotEmpty)
-                      Polyline(
-                        points: _walkingFromDestPoints,
-                        strokeWidth: 3.0,
-                        color: Colors.blue.withValues(alpha: 0.6),
-                        pattern: const StrokePattern.dotted(),
-                      ),
-                  ],
-                ),
-              // User Segment Polyline Layer (Foreground - Blue)
-              if (_userRoutePoints.isNotEmpty)
-                PolylineLayer(
-                  polylines: [
-                    Polyline(
-                      points: _userRoutePoints,
-                      strokeWidth: 5.0, // Slightly thicker
-                      color: Colors.blue.withValues(alpha: .9),
-                    ),
-                  ],
-                ),
-              // Stop Markers Layer
-              if (_stopMarkers.isNotEmpty)
-                MarkerLayer(
-                  markers: [
-                    ..._stopMarkers,
-                    if (widget.userSourceLatLng != null)
-                      Marker(
-                        point: widget.userSourceLatLng!,
-                        width: 30,
-                        height: 30,
-                        child: const Icon(
-                          Icons.location_on,
-                          color: Colors.green,
-                          size: 30,
-                        ),
-                      ),
-                    if (widget.userDestLatLng != null)
-                      Marker(
-                        point: widget.userDestLatLng!,
-                        width: 30,
-                        height: 30,
-                        child: const Icon(
-                          Icons.location_on,
-                          color: Colors.red,
-                          size: 30,
-                        ),
-                      ),
-                  ],
-                ),
-              // User location layer with flutter_map_location_marker
-              if (_showUserLocation)
-                CurrentLocationLayer(
-                  style: LocationMarkerStyle(
-                    marker: const DefaultLocationMarker(
-                      color: Colors.blue,
-                      child: Icon(Icons.person, color: Colors.white, size: 16),
-                    ),
-                    markerSize: const Size(30, 30),
-                    accuracyCircleColor: Colors.blue.withValues(alpha: 0.1),
-                    headingSectorColor: Colors.blue.withValues(alpha: .8),
+                    ],
                   ),
-                ),
-              // Bus location marker
-              if (_interpolatedLocation != null)
-                MarkerLayer(
-                  markers: [
-                    Marker(
-                      point: _interpolatedLocation!.latLng,
-                      width: 50,
-                      height: 50,
-                      child: _buildBusMarker(),
+                // Walking Path (Dotted)
+                if (_walkingToSourcePoints.isNotEmpty ||
+                    _walkingFromDestPoints.isNotEmpty)
+                  PolylineLayer(
+                    polylines: [
+                      if (_walkingToSourcePoints.isNotEmpty)
+                        Polyline(
+                          points: _walkingToSourcePoints,
+                          strokeWidth: 3.0,
+                          color: Colors.blue.withValues(alpha: 0.6),
+                          pattern: const StrokePattern.dotted(),
+                        ),
+                      if (_walkingFromDestPoints.isNotEmpty)
+                        Polyline(
+                          points: _walkingFromDestPoints,
+                          strokeWidth: 3.0,
+                          color: Colors.blue.withValues(alpha: 0.6),
+                          pattern: const StrokePattern.dotted(),
+                        ),
+                    ],
+                  ),
+                // User Segment Polyline Layer (Foreground - Blue)
+                if (_userRoutePoints.isNotEmpty)
+                  PolylineLayer(
+                    polylines: [
+                      Polyline(
+                        points: _userRoutePoints,
+                        strokeWidth: 5.0, // Slightly thicker
+                        color: Colors.blue.withValues(alpha: .9),
+                      ),
+                    ],
+                  ),
+                // Stop Markers Layer
+                if (_stopMarkers.isNotEmpty)
+                  MarkerLayer(
+                    markers: [
+                      ..._stopMarkers,
+                      if (widget.userSourceLatLng != null)
+                        Marker(
+                          point: widget.userSourceLatLng!,
+                          width: 30,
+                          height: 30,
+                          child: const Icon(
+                            Icons.location_on,
+                            color: Colors.green,
+                            size: 30,
+                          ),
+                        ),
+                      if (widget.userDestLatLng != null)
+                        Marker(
+                          point: widget.userDestLatLng!,
+                          width: 30,
+                          height: 30,
+                          child: const Icon(
+                            Icons.location_on,
+                            color: Colors.red,
+                            size: 30,
+                          ),
+                        ),
+                    ],
+                  ),
+                // User location layer with flutter_map_location_marker
+                if (_showUserLocation)
+                  CurrentLocationLayer(
+                    style: LocationMarkerStyle(
+                      marker: const DefaultLocationMarker(
+                        color: Colors.blue,
+                        child: Icon(
+                          Icons.person,
+                          color: Colors.white,
+                          size: 16,
+                        ),
+                      ),
+                      markerSize: const Size(30, 30),
+                      accuracyCircleColor: Colors.blue.withValues(alpha: 0.1),
+                      headingSectorColor: Colors.blue.withValues(alpha: .8),
                     ),
-                  ],
-                ),
-            ],
-          ),
-
+                  ),
+                // Bus location marker
+                if (_interpolatedLocation != null)
+                  MarkerLayer(
+                    markers: [
+                      Marker(
+                        point: _interpolatedLocation!.latLng,
+                        width: 50,
+                        height: 50,
+                        child: _buildBusMarker(),
+                      ),
+                    ],
+                  ),
+              ],
+            ),
+          ), // FlutterMap + RepaintBoundary
           // Top Floating Bar (Back + Actions)
           Positioned(
             top: 40,
@@ -859,34 +1232,41 @@ class _BusTrackingScreenState extends State<BusTrackingScreen>
                   ),
                 ),
                 // Actions (Fav + Reminder)
-                Row(
-                  children: [
-                    // Reminder Bell
-                    CircleAvatar(
-                      backgroundColor: Colors.white,
-                      child: IconButton(
-                        icon: Icon(
-                          _isReminderSet
-                              ? Icons.notifications_active
-                              : Icons.notifications_none,
-                          color: _isReminderSet ? Colors.orange : Colors.black,
+                Flexible(
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // Reminder Bell
+                      CircleAvatar(
+                        backgroundColor: Colors.white,
+                        child: IconButton(
+                          icon: Icon(
+                            _isReminderSet
+                                ? Icons.notifications_active
+                                : Icons.notifications_none,
+                            color: _isReminderSet
+                                ? Colors.orange
+                                : Colors.black,
+                          ),
+                          onPressed: _toggleReminder,
                         ),
-                        onPressed: _toggleReminder,
                       ),
-                    ),
-                    const SizedBox(width: 12),
-                    // Favorite Heart
-                    CircleAvatar(
-                      backgroundColor: Colors.white,
-                      child: IconButton(
-                        icon: Icon(
-                          _isFavorite ? Icons.favorite : Icons.favorite_border,
-                          color: _isFavorite ? Colors.red : Colors.black,
+                      const SizedBox(width: 12),
+                      // Favorite Heart
+                      CircleAvatar(
+                        backgroundColor: Colors.white,
+                        child: IconButton(
+                          icon: Icon(
+                            _isFavorite
+                                ? Icons.favorite
+                                : Icons.favorite_border,
+                            color: _isFavorite ? Colors.red : Colors.black,
+                          ),
+                          onPressed: _toggleFavorite,
                         ),
-                        onPressed: _toggleFavorite,
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ],
             ),
@@ -1124,186 +1504,227 @@ class _BusTrackingScreenState extends State<BusTrackingScreen>
                     // Expanded Content (Scrollable)
                     if (_isPanelExpanded)
                       Expanded(
-                        child: SingleChildScrollView(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              // Conductor Info
-                              if (_conductor != null) ...[
-                                Row(
-                                  children: [
-                                    CircleAvatar(
-                                      radius: 20,
-                                      backgroundColor: Theme.of(
-                                        context,
-                                      ).colorScheme.tertiaryContainer,
-                                      child: Text(
-                                        _conductor!.name[0].toUpperCase(),
-                                        style: TextStyle(
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.bold,
-                                          color: Theme.of(
-                                            context,
-                                          ).colorScheme.onTertiaryContainer,
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 12),
-                                    Column(
+                        child: Column(
+                          children: [
+                            TabBar(
+                              controller: _tabController,
+                              labelColor: Theme.of(context).colorScheme.primary,
+                              unselectedLabelColor: Theme.of(
+                                context,
+                              ).colorScheme.onSurfaceVariant,
+                              indicatorColor: Theme.of(
+                                context,
+                              ).colorScheme.primary,
+                              tabs: const [
+                                Tab(text: "Live"),
+                                Tab(text: "Stops"),
+                              ],
+                            ),
+                            Expanded(
+                              child: TabBarView(
+                                controller: _tabController,
+                                children: [
+                                  SingleChildScrollView(
+                                    child: Column(
                                       crossAxisAlignment:
                                           CrossAxisAlignment.start,
                                       children: [
-                                        Text(
-                                          "Conductor: ${_conductor!.name}",
-                                          style: const TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 16,
+                                        // Conductor Info
+                                        if (_conductor != null) ...[
+                                          Row(
+                                            children: [
+                                              CircleAvatar(
+                                                radius: 20,
+                                                backgroundColor: Theme.of(
+                                                  context,
+                                                ).colorScheme.tertiaryContainer,
+                                                child: Text(
+                                                  _conductor!.name[0]
+                                                      .toUpperCase(),
+                                                  style: TextStyle(
+                                                    fontSize: 16,
+                                                    fontWeight: FontWeight.bold,
+                                                    color: Theme.of(context)
+                                                        .colorScheme
+                                                        .onTertiaryContainer,
+                                                  ),
+                                                ),
+                                              ),
+                                              const SizedBox(width: 12),
+                                              Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                children: [
+                                                  Text(
+                                                    "Conductor: ${_conductor!.name}",
+                                                    style: const TextStyle(
+                                                      fontWeight:
+                                                          FontWeight.bold,
+                                                      fontSize: 16,
+                                                    ),
+                                                  ),
+                                                  const Text(
+                                                    "Verified Staff",
+                                                    style: TextStyle(
+                                                      color: Colors.green,
+                                                      fontSize: 12,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ],
                                           ),
-                                        ),
-                                        const Text(
-                                          "Verified Staff",
-                                          style: TextStyle(
-                                            color: Colors.green,
-                                            fontSize: 12,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 16),
-                              ],
-
-                              // Next Stop Detailed Card
-                              if (_nextStopName != null) ...[
-                                Container(
-                                  width: double.infinity,
-                                  padding: const EdgeInsets.all(12),
-                                  decoration: BoxDecoration(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .surfaceContainerHighest
-                                        .withValues(alpha: 0.5),
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(
-                                      color: Theme.of(
-                                        context,
-                                      ).colorScheme.outlineVariant,
-                                    ),
-                                  ),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        "NEXT STOP",
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .labelSmall
-                                            ?.copyWith(
-                                              color: Theme.of(
-                                                context,
-                                              ).colorScheme.secondary,
-                                              fontWeight: FontWeight.bold,
-                                            ),
-                                      ),
-                                      const SizedBox(height: 4),
-                                      Row(
-                                        children: [
-                                          Icon(
-                                            Icons.location_on,
-                                            size: 20,
-                                            color: Theme.of(
-                                              context,
-                                            ).colorScheme.primary,
-                                          ),
-                                          const SizedBox(width: 8),
-                                          Text(
-                                            _nextStopName!,
-                                            style: const TextStyle(
-                                              fontSize: 18,
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                          ),
+                                          const SizedBox(height: 16),
                                         ],
-                                      ),
-                                      if (_interpolatedLocation != null) ...[
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          "Speed: ${_interpolatedLocation!.speedKmh.toStringAsFixed(1)} km/h",
-                                          style: Theme.of(
-                                            context,
-                                          ).textTheme.bodySmall,
+
+                                        // Next Stop Detailed Card
+                                        if (_nextStopName != null) ...[
+                                          Container(
+                                            width: double.infinity,
+                                            padding: const EdgeInsets.all(12),
+                                            decoration: BoxDecoration(
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .surfaceContainerHighest
+                                                  .withValues(alpha: 0.5),
+                                              borderRadius:
+                                                  BorderRadius.circular(12),
+                                              border: Border.all(
+                                                color: Theme.of(
+                                                  context,
+                                                ).colorScheme.outlineVariant,
+                                              ),
+                                            ),
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  "NEXT STOP",
+                                                  style: Theme.of(context)
+                                                      .textTheme
+                                                      .labelSmall
+                                                      ?.copyWith(
+                                                        color: Theme.of(
+                                                          context,
+                                                        ).colorScheme.secondary,
+                                                        fontWeight:
+                                                            FontWeight.bold,
+                                                      ),
+                                                ),
+                                                const SizedBox(height: 4),
+                                                Row(
+                                                  children: [
+                                                    Icon(
+                                                      Icons.location_on,
+                                                      size: 20,
+                                                      color: Theme.of(
+                                                        context,
+                                                      ).colorScheme.primary,
+                                                    ),
+                                                    const SizedBox(width: 8),
+                                                    Text(
+                                                      _nextStopName!,
+                                                      style: const TextStyle(
+                                                        fontSize: 18,
+                                                        fontWeight:
+                                                            FontWeight.w600,
+                                                      ),
+                                                    ),
+                                                  ],
+                                                ),
+                                                if (_interpolatedLocation !=
+                                                    null) ...[
+                                                  const SizedBox(height: 4),
+                                                  Text(
+                                                    "Speed: ${_interpolatedLocation!.speedKmh.toStringAsFixed(1)} km/h",
+                                                    style: Theme.of(
+                                                      context,
+                                                    ).textTheme.bodySmall,
+                                                  ),
+                                                ],
+                                              ],
+                                            ),
+                                          ),
+                                          const SizedBox(height: 24),
+                                        ],
+
+                                        // Ticket Price Section
+                                        if (widget.userSourceStop != null &&
+                                            widget.userDestStop != null) ...[
+                                          _buildPriceSection(),
+                                          const SizedBox(height: 24),
+                                        ],
+
+                                        const Divider(),
+                                        const SizedBox(height: 16),
+
+                                        // Reviews Section header
+                                        Row(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.spaceBetween,
+                                          children: [
+                                            Text(
+                                              "Passenger Reviews",
+                                              style: Theme.of(context)
+                                                  .textTheme
+                                                  .titleMedium
+                                                  ?.copyWith(
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
+                                            ),
+                                            TextButton.icon(
+                                              onPressed: _showAddReviewDialog,
+                                              icon: const Icon(
+                                                Icons.add_comment,
+                                                size: 18,
+                                              ),
+                                              label: const Text("Rate"),
+                                            ),
+                                          ],
                                         ),
+                                        const SizedBox(height: 8),
+
+                                        // Reviews List
+                                        if (_isLoadingReviews)
+                                          const Center(
+                                            child: CircularProgressIndicator(),
+                                          )
+                                        else if (_reviews.isEmpty)
+                                          Center(
+                                            child: Padding(
+                                              padding: const EdgeInsets.all(
+                                                16.0,
+                                              ),
+                                              child: Text(
+                                                "No reviews yet. Be the first!",
+                                                style: TextStyle(
+                                                  color: Theme.of(context)
+                                                      .colorScheme
+                                                      .onSurfaceVariant,
+                                                ),
+                                              ),
+                                            ),
+                                          )
+                                        else
+                                          ..._reviews.map(
+                                            (review) => Padding(
+                                              padding: const EdgeInsets.only(
+                                                bottom: 8.0,
+                                              ),
+                                              child: _buildReviewCard(review),
+                                            ),
+                                          ),
+
+                                        const SizedBox(height: 40),
                                       ],
-                                    ],
-                                  ),
-                                ),
-                                const SizedBox(height: 24),
-                              ],
-
-                              // Ticket Price Section
-                              if (widget.userSourceStop != null &&
-                                  widget.userDestStop != null) ...[
-                                _buildPriceSection(),
-                                const SizedBox(height: 24),
-                              ],
-
-                              const Divider(),
-                              const SizedBox(height: 16),
-
-                              // Reviews Section header
-                              Row(
-                                mainAxisAlignment:
-                                    MainAxisAlignment.spaceBetween,
-                                children: [
-                                  Text(
-                                    "Passenger Reviews",
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .titleMedium
-                                        ?.copyWith(fontWeight: FontWeight.bold),
-                                  ),
-                                  TextButton.icon(
-                                    onPressed: _showAddReviewDialog,
-                                    icon: const Icon(
-                                      Icons.add_comment,
-                                      size: 18,
                                     ),
-                                    label: const Text("Rate"),
                                   ),
+                                  _buildStopsTab(),
                                 ],
                               ),
-                              const SizedBox(height: 8),
-
-                              // Reviews List
-                              if (_isLoadingReviews)
-                                const Center(child: CircularProgressIndicator())
-                              else if (_reviews.isEmpty)
-                                Center(
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(16.0),
-                                    child: Text(
-                                      "No reviews yet. Be the first!",
-                                      style: TextStyle(
-                                        color: Theme.of(
-                                          context,
-                                        ).colorScheme.onSurfaceVariant,
-                                      ),
-                                    ),
-                                  ),
-                                )
-                              else
-                                ..._reviews.map(
-                                  (review) => Padding(
-                                    padding: const EdgeInsets.only(bottom: 8.0),
-                                    child: _buildReviewCard(review),
-                                  ),
-                                ),
-
-                              const SizedBox(height: 40),
-                            ],
-                          ),
+                            ),
+                          ],
                         ),
                       ),
                   ],

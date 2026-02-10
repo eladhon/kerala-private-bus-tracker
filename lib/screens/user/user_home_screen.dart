@@ -19,6 +19,7 @@ import '../../models/vehicle_state_model.dart';
 import 'student_pass_screen.dart';
 // import '../auth/login_screen.dart'; // Unused
 import 'trip_history_screen.dart';
+import 'nearby_stops_screen.dart';
 import '../../widgets/sos_button.dart';
 
 /// User home screen with quick picks and bus list
@@ -56,43 +57,16 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
   Future<void> _loadData() async {
     setState(() => _isLoading = true);
     try {
-      final popularRoutesFuture = _queries.getPopularRoutes();
-      final busesFuture = _queries.getAvailableBuses();
-      final userFuture = _queries.getUserByPhone(widget.phoneNumber);
-      final vehiclesFuture = _queries.getAllVehicleStates();
-
+      // Fetch all data in parallel
       final prefs = await SharedPreferences.getInstance();
       final recentIds = prefs.getStringList('recent_bus_ids') ?? [];
-      final recentBusesFuture = _queries.getBusesByIds(recentIds);
-
-      // Attempt to get location, but don't block too long or fail hard
-      Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.medium,
-        ),
-      ).catchError((error) {
-        debugPrint("Error getting location: $error");
-        // Return a default or null but wrapped in Future
-        return Position(
-          longitude: 0,
-          latitude: 0,
-          timestamp: DateTime.now(),
-          accuracy: 0,
-          altitude: 0,
-          heading: 0,
-          speed: 0,
-          speedAccuracy: 0,
-          altitudeAccuracy: 0,
-          headingAccuracy: 0,
-        );
-      });
 
       final results = await Future.wait([
-        popularRoutesFuture,
-        busesFuture,
-        userFuture,
-        vehiclesFuture,
-        recentBusesFuture,
+        _queries.getPopularRoutes(),
+        _queries.getAvailableBuses(),
+        _queries.getUserByPhone(widget.phoneNumber),
+        _queries.getAllVehicleStates(),
+        _queries.getBusesByIds(recentIds),
       ]);
 
       final popularRoutes = results[0] as List<RouteModel>;
@@ -101,32 +75,28 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
       final vehicleStates = results[3] as List<VehicleStateModel>;
       final fetchedRecentBuses = results[4] as List<BusModel>;
 
-      // Reorder recent buses
+      // Prepare data locally before setState
       final recentBusMap = {for (var b in fetchedRecentBuses) b.id: b};
       final orderedRecentBuses = recentIds
           .map((id) => recentBusMap[id])
           .whereType<BusModel>()
           .toList();
 
-      final Map<String, VehicleStateModel> locationMap = {
-        for (var state in vehicleStates) state.busId: state,
-      };
+      final locationMap = {for (var state in vehicleStates) state.busId: state};
 
+      // Fetch user-specific data if logged in
       UserPreferenceModel? prefsModel;
+      List<BusModel> favorites = [];
       if (user != null) {
-        prefsModel = await _queries.getUserPreferences(user.id);
-        final favorites = await _queries.getFavoriteBuses(user.id);
-
-        setState(() {
-          _favoriteBuses = favorites;
-        });
+        final userDataResults = await Future.wait([
+          _queries.getUserPreferences(user.id),
+          _queries.getFavoriteBuses(user.id),
+        ]);
+        prefsModel = userDataResults[0] as UserPreferenceModel?;
+        favorites = userDataResults[1] as List<BusModel>;
       }
 
-      // Update location asynchronously
-      Geolocator.getCurrentPosition()
-          .then((pos) => setState(() => _userPosition = pos))
-          .catchError((e) => debugPrint("Location error: $e"));
-
+      // Single setState with all data
       if (mounted) {
         setState(() {
           _popularRoutes = popularRoutes;
@@ -135,11 +105,26 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
           _userPreferences = prefsModel;
           _busLocations = locationMap;
           _recentBuses = orderedRecentBuses;
+          _favoriteBuses = favorites;
+          _isLoading = false;
         });
       }
+
+      // Fetch location asynchronously (non-blocking)
+      Geolocator.getCurrentPosition(
+            locationSettings: const LocationSettings(
+              accuracy: LocationAccuracy.medium,
+            ),
+          )
+          .then((pos) {
+            if (mounted) setState(() => _userPosition = pos);
+          })
+          .catchError((e) {
+            debugPrint("Location error: $e");
+            return null;
+          });
     } catch (e) {
       debugPrint('Error loading data: $e');
-    } finally {
       if (mounted) setState(() => _isLoading = false);
     }
   }
@@ -886,6 +871,91 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
                   child: const Text('Edit Profile'),
                 ),
               ],
+            ),
+          ),
+
+          const SizedBox(height: 16),
+
+          // "Stops Near Me" Feature Card
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(20),
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const NearbyStopsScreen(),
+                ),
+              ),
+              child: Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      Theme.of(context).colorScheme.primaryContainer,
+                      Theme.of(context).colorScheme.tertiaryContainer,
+                    ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Theme.of(
+                        context,
+                      ).colorScheme.primary.withValues(alpha: 0.2),
+                      blurRadius: 12,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Theme.of(
+                          context,
+                        ).colorScheme.primary.withValues(alpha: 0.2),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        Icons.radar,
+                        size: 32,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '\ud83d\ude8f Stops Near Me',
+                            style: Theme.of(context).textTheme.titleMedium
+                                ?.copyWith(fontWeight: FontWeight.bold),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Find bus stops around you. Move the map, find your ride! \ud83c\udfaf',
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onSurfaceVariant,
+                                ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Icon(
+                      Icons.arrow_forward_ios,
+                      size: 16,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ],
+                ),
+              ),
             ),
           ),
 

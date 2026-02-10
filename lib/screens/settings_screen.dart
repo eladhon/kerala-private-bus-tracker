@@ -4,6 +4,7 @@ import '../models/user_model.dart';
 import 'auth/login_screen.dart';
 import 'user/edit_profile_screen.dart';
 import '../models/user_preference_model.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 // import '../services/supabase_queries.dart'; // Unused
 
 class SettingsScreen extends StatelessWidget {
@@ -165,13 +166,18 @@ class SettingsScreen extends StatelessWidget {
     );
   }
 
-  void _logout(BuildContext context) {
+  Future<void> _logout(BuildContext context) async {
     // Clear any potential background tasks or services here if needed
-    // Then navigate to login
-    Navigator.pushAndRemoveUntil(
-      context,
-      MaterialPageRoute(builder: (context) => const LoginScreen()),
-      (route) => false,
-    );
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.clear();
+
+    if (context.mounted) {
+      // Then navigate to login
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (context) => const LoginScreen()),
+        (route) => false,
+      );
+    }
   }
 }

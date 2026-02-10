@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../user/user_home_screen.dart';
 import '../conductor/conductor_home_screen.dart';
 
@@ -56,6 +57,12 @@ class _OtpScreenState extends State<OtpScreen> {
       // Simplified verification - in production, verify with Supabase OTP
       // For demo, accept any 6-digit OTP
       await Future.delayed(const Duration(seconds: 1));
+
+      // Persist session locally for demo
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('isLoggedIn', true);
+      await prefs.setString('userPhone', widget.phoneNumber);
+      await prefs.setString('userRole', widget.userRole);
 
       if (mounted) {
         // Navigate based on user role

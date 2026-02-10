@@ -39,7 +39,7 @@ class _ConductorHomeScreenState extends State<ConductorHomeScreen> {
 
   BusModel? _assignedBus;
   Position? _currentPosition;
-  Timer? _locationTimer;
+  StreamSubscription<Position>? _positionStreamSubscription;
   bool _isTracking = false;
   String? _selectedReportType; // 'repair', 'fuel', or null for list
   bool _isLoading = true;
@@ -49,8 +49,6 @@ class _ConductorHomeScreenState extends State<ConductorHomeScreen> {
   // Raw GPS is now sent to server; smoothing happens via Postgres trigger
   DateTime _lastUploadTime = DateTime.fromMillisecondsSinceEpoch(0);
 
-  // Local update interval (for UI display)
-  static const int _localUpdateIntervalSeconds = 2;
   // Server upload interval (raw GPS sent every 15s, smoothed by Postgres)
   static const int _serverUploadIntervalSeconds = 15;
 
@@ -223,30 +221,25 @@ class _ConductorHomeScreenState extends State<ConductorHomeScreen> {
 
     setState(() => _isTracking = true);
 
-    // Get initial position
-    await _updateLocation();
-
-    // Start timer-based tracking
-    _locationTimer = Timer.periodic(
-      const Duration(seconds: _localUpdateIntervalSeconds),
-      (_) => _updateLocation(),
+    // Start stream-based tracking
+    final locationSettings = const LocationSettings(
+      accuracy: LocationAccuracy.bestForNavigation,
+      distanceFilter: 10, // Update every 10 meters if moved
     );
+
+    _positionStreamSubscription =
+        Geolocator.getPositionStream(locationSettings: locationSettings).listen(
+          _onLocationUpdate,
+          onError: (e) {
+            debugPrint('Error in location stream: $e');
+          },
+        );
   }
 
-  Future<void> _updateLocation() async {
+  void _onLocationUpdate(Position position) async {
     try {
-      final position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-        ),
-      );
-
       // Store raw position for local UI display
-      // Server-side smoothing handles the canonical state
       setState(() => _currentPosition = position);
-
-      // Center map on current position
-      _mapController.move(LatLng(position.latitude, position.longitude), 15);
 
       // Throttled upload of RAW GPS to server
       // The Postgres trigger will apply EMA smoothing
@@ -265,13 +258,13 @@ class _ConductorHomeScreenState extends State<ConductorHomeScreen> {
         _lastUploadTime = now;
       }
     } catch (e) {
-      debugPrint('Error updating location: $e');
+      debugPrint('Error processing location update: $e');
     }
   }
 
   void _stopTracking() {
-    _locationTimer?.cancel();
-    _locationTimer = null;
+    _positionStreamSubscription?.cancel();
+    _positionStreamSubscription = null;
     if (mounted) {
       setState(() => _isTracking = false);
     }
@@ -528,8 +521,9 @@ class _ConductorHomeScreenState extends State<ConductorHomeScreen> {
                 }).toList(),
               ),
 
-            // Current location marker layer
+            // Current location marker layer with smooth animation
             CurrentLocationLayer(
+              alignPositionOnUpdate: AlignOnUpdate.always,
               style: LocationMarkerStyle(
                 marker: DefaultLocationMarker(
                   color: colorScheme.primary,
@@ -545,21 +539,6 @@ class _ConductorHomeScreenState extends State<ConductorHomeScreen> {
                 headingSectorRadius: 60,
               ),
             ),
-            // Custom bus marker if position available
-            if (_currentPosition != null)
-              MarkerLayer(
-                markers: [
-                  Marker(
-                    point: LatLng(
-                      _currentPosition!.latitude,
-                      _currentPosition!.longitude,
-                    ),
-                    width: 50,
-                    height: 50,
-                    child: _buildBusMarker(),
-                  ),
-                ],
-              ),
           ],
         ),
 
@@ -1137,27 +1116,6 @@ class _ConductorHomeScreenState extends State<ConductorHomeScreen> {
           Text(label, style: TextStyle(color: Colors.grey.shade600)),
           Text(value, style: const TextStyle(fontWeight: FontWeight.w500)),
         ],
-      ),
-    );
-  }
-
-  Widget _buildBusMarker() {
-    return Container(
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.primary,
-        shape: BoxShape.circle,
-        border: Border.all(
-          color: Theme.of(context).colorScheme.onPrimary,
-          width: 3,
-        ),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withValues(alpha: 0.3), blurRadius: 8),
-        ],
-      ),
-      child: Icon(
-        Icons.directions_bus,
-        color: Theme.of(context).colorScheme.onPrimary,
-        size: 30,
       ),
     );
   }
